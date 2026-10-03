@@ -1,0 +1,27 @@
+{
+  "name": "effect-lib",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Small Effect building blocks, one subpath export each",
+  "exports": {
+    "./json-store": "./src/json-store/index.ts",
+    "./systemd": "./src/systemd/index.ts"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint"
+  },
+  "peerDependencies": {
+    "effect": "4.0.0"
+  },
+  "devDependencies": {
+    "@effect/platform-bun": "4.0.0",
+    "@types/bun": "^1.4.2",
+    "oxlint": "^1.86.0",
+    "oxlint-tsgolint": "^7.0.2003",
+    "ts-lint": "github:laroccacharly/ts-lint#v0.1.0",
+    "typescript": "^7.0.2"
+  }
+}
