@@ -9,6 +9,7 @@ export interface ServiceConfig {
   readonly description: string
   // ExecStart, as argv; the program should be an absolute path.
   readonly command: readonly [string, ...string[]]
+  // Added to the user manager's environment, not your shell's; only for what the service needs (see README).
   readonly environment?: Readonly<Record<string, string>>
   // Defaults to on-failure, after 30 seconds.
   readonly restart?: Restart
