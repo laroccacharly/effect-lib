@@ -1,11 +1,11 @@
-import { ConfigProvider, Context, type Duration, Effect, Layer, Option, Schedule, Schema } from "effect"
+import { Context, type Duration, Effect, Layer, Option, Schedule, Schema } from "effect"
 
 // One service for every app, so apps that declare the same secret name share the stored value.
 export const SERVICE = "effect-lib/credentials"
 
 export class CredentialsError extends Schema.TaggedError<CredentialsError>()("CredentialsError", {
   name: Schema.String,
-  // missing: login found neither the environment nor a terminal; invalid: does not match the schema; keyring: the OS keyring failed.
+  // missing: in neither the environment nor the keyring; invalid: does not match the schema; keyring: the OS keyring failed.
   reason: Schema.Literals(["missing", "invalid", "keyring"]),
   message: Schema.String,
 }) {}
@@ -116,40 +116,7 @@ export const memoryKeyring = (initial: Readonly<Record<string, string>> = {}): K
   }
 }
 
-// The keyring login and logout write to. Provide it with `layer`, which also lets Config read from it.
+// The keyring secrets read and write. Nothing is provided by default: provide it with `layer`.
 export const Keyring: Context.Service<Keyring, Keyring> = Context.Service("effect-lib/credentials/Keyring")
 
-// Answers only the given names, so other Config lookups, e.g. a defaulted PORT, never touch the keyring.
-// Values are trimmed and a blank one counts as absent; a keyring failure is a SourceError.
-export const configProvider = (keyring: Keyring, names: ReadonlyArray<string>): ConfigProvider.ConfigProvider => {
-  const known = new Set(names)
-  return ConfigProvider.make((path) => {
-    const name = path.length === 1 ? String(path[0]) : ""
-    const stored = known.has(name)
-      ? keyring.get(name).pipe(Effect.mapError((error) => new ConfigProvider.SourceError({ message: error.message, cause: error })))
-      : Effect.succeed(Option.none<string>())
-    return stored.pipe(
-      Effect.map((entry) =>
-        entry.pipe(
-          Option.map((text) => text.trim()),
-          Option.filter((text) => text !== ""),
-          Option.map(ConfigProvider.makeValue),
-          Option.getOrUndefined
-        )
-      )
-    )
-  })
-}
-
-// Provides `keyring` and adds it to the current ConfigProvider as a fallback for these secrets,
-// so the environment wins and `Config.Redacted(name)` anywhere in the app reads the keyring too.
-export const layer = (keyring: Keyring, secrets: ReadonlyArray<{ readonly name: string }>): Layer.Layer<Keyring> =>
-  Layer.merge(
-    Layer.succeed(Keyring)(keyring),
-    ConfigProvider.layerAdd(
-      configProvider(
-        keyring,
-        secrets.map((entry) => entry.name)
-      )
-    )
-  )
+export const layer = (keyring: Keyring): Layer.Layer<Keyring> => Layer.succeed(Keyring)(keyring)

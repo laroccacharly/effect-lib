@@ -3,7 +3,7 @@
 Small [Effect](https://effect.website) building blocks in one package, one subpath export each. `effect` (4.0.0) is a peer dependency.
 
 ```sh
-bun add github:laroccacharly/effect-lib#v0.3.0
+bun add github:laroccacharly/effect-lib#v0.4.0
 ```
 
 | Import | What it is |
@@ -14,7 +14,7 @@ bun add github:laroccacharly/effect-lib#v0.3.0
 
 ## credentials
 
-Secrets an app declares by name, read through Effect's `Config` from the environment variable of that name, otherwise from the OS keyring through `Bun.secrets`.
+Secrets an app declares by name, read from the environment variable of that name, otherwise from the OS keyring through `Bun.secrets`.
 
 ```ts
 import * as Credentials from "effect-lib/credentials"
@@ -23,8 +23,8 @@ const OpenRouterKey = Credentials.secret("OPENROUTER_API_KEY", { label: "OpenRou
 const AdminEmail = Credentials.secret("ADMIN_EMAIL", { optional: true, sensitive: false, schema: Email })
 const credentials = Credentials.make([OpenRouterKey, AdminEmail])
 
-const key = yield* OpenRouterKey.config // Value<"OPENROUTER_API_KEY">: a ConfigError when unset
-const email = yield* AdminEmail.config // Option<Value<"ADMIN_EMAIL">>
+const key = yield* OpenRouterKey.resolve // Value<"OPENROUTER_API_KEY">: fails with reason "missing" when unset
+const email = yield* AdminEmail.resolve // Option<Value<"ADMIN_EMAIL">>
 
 const cli = Command.make("mybot").pipe(Command.withSubcommands([...credentials.commands, run]))
 
@@ -32,9 +32,9 @@ const cli = Command.make("mybot").pipe(Command.withSubcommands([...credentials.c
 program.pipe(Effect.provide(credentials.layer(Credentials.bunKeyring())))
 ```
 
-`make` takes the app's secrets once, so its keyring layer and its commands cover the same names. `credentials.layer(keyring)` provides the `Keyring` that `login` and `logout` write to, and adds it to the current `ConfigProvider` as a fallback (`ConfigProvider.layerAdd`) for those secrets only: the environment wins, and any `Config` in the app reads a declared secret from the keyring too, e.g. `Config.Redacted("OPENROUTER_API_KEY")` or `Flag.withFallbackConfig`. Other lookups, such as a defaulted `PORT`, never touch the keyring. Nothing is provided by default.
+The keyring is a `Keyring` service with no default: the app provides it, with `credentials.layer` or `Credentials.layer`. `make` takes the app's secrets once, so its commands cover the same names.
 
-The types come from the declaration: `config` is a `Config`, so it can be yielded or composed. The name becomes a brand, so a client taking `Value<"OPENROUTER_API_KEY">` rejects any other secret; `optional: true` makes it an `Option`; `schema` (a `Schema.Codec<A, string>`, default the text itself) decodes the trimmed text. A `Value` is a `Redacted`, so it never shows in logs.
+The types come from the declaration: the name becomes a brand, so a client taking `Value<"OPENROUTER_API_KEY">` rejects any other secret; `optional: true` makes `resolve` an `Option`; `schema` (a `Schema.Codec<A, string>`, default the text itself) decodes the trimmed text. A `Value` is a `Redacted`, so it never shows in logs.
 
 Every app stores under one keyring service, `effect-lib/credentials`, with the variable name as the entry name: apps that declare the same name share the value, so logging in once is enough.
 
@@ -46,13 +46,13 @@ Every app stores under one keyring service, `effect-lib/credentials`, with the v
 
 The same steps are Effects on `credentials`: `login(options)`, `logout`, `status`.
 
-The keyring stays the source of truth; nothing is cached. A long-running process keeps its keyring connection, which goes stale when the keyring daemon restarts, so each read or write falls back to `Bun.secrets` in a fresh process (`process.execPath` with `BUN_BE_BUN=1`, so compiled binaries work too), and both are retried 3 times from 200ms while the daemon comes back. Reading fails with Effect's `ConfigError` (missing, invalid, or the keyring's `SourceError`); `login`, `logout` and keyring writes fail with `CredentialsError`, whose `reason` is `missing`, `invalid` or `keyring`.
+The keyring stays the source of truth; nothing is cached. A long-running process keeps its keyring connection, which goes stale when the keyring daemon restarts, so each read or write falls back to `Bun.secrets` in a fresh process (`process.execPath` with `BUN_BE_BUN=1`, so compiled binaries work too), and both are retried 3 times from 200ms while the daemon comes back. Failures are a `CredentialsError` whose `reason` is `missing`, `invalid` or `keyring`, so they stay distinct from the app's own `ConfigError`.
 
 Tests swap the keyring and the environment:
 
 ```ts
 effect.pipe(
-  Effect.provide(credentials.layer(Credentials.memoryKeyring({ OPENROUTER_API_KEY: "test" }))),
+  Effect.provide(Credentials.layer(Credentials.memoryKeyring({ OPENROUTER_API_KEY: "test" }))),
   Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnvRecord({}))
 )
 ```
@@ -112,5 +112,5 @@ Consumers pin a tag, so a new version is a new specifier and bun fetches it rath
 ```sh
 bun run typecheck && bun run lint && bun test
 # bump "version" in package.json, then:
-git commit -am "v0.3.0" && git tag v0.3.0 && git push origin main v0.3.0
+git commit -am "v0.4.0" && git tag v0.4.0 && git push origin main v0.4.0
 ```

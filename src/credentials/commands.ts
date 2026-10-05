@@ -1,4 +1,4 @@
-import { type Config, Console, Effect, Option, Redacted, type Terminal } from "effect"
+import { Console, Effect, Option, Redacted, type Terminal } from "effect"
 import { Command, Flag, Prompt } from "effect/cli"
 import { CredentialsError, type Keyring } from "./keyring.ts"
 import type { SecretEntry } from "./secret.ts"
@@ -27,11 +27,7 @@ const promptFor = (entry: SecretEntry) => {
 
 // Stores each secret the environment has, keeps what the keyring already has, and prompts for the rest.
 // Without a terminal it behaves as `fromEnv`.
-export const login: (secrets: ReadonlyArray<SecretEntry>, options?: LoginOptions) => Effect.Effect<
-  void,
-  CredentialsError | Config.ConfigError | Terminal.QuitError,
-  Prompt.Environment | Keyring
-> = Effect.fn(
+export const login: (secrets: ReadonlyArray<SecretEntry>, options?: LoginOptions) => Effect.Effect<void, CredentialsError | Terminal.QuitError, Prompt.Environment | Keyring> = Effect.fn(
   "credentials.login"
 )(function* login(secrets: ReadonlyArray<SecretEntry>, options: LoginOptions = {}) {
   const interactive = options.fromEnv !== true && process.stdin.isTTY

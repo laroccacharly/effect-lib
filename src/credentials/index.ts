@@ -1,12 +1,12 @@
 export { type LoginOptions } from "./commands.ts"
 export {
   bunKeyring,
-  configProvider,
   CredentialsError,
   freshProcess,
   fromBackends,
   inProcess,
   Keyring,
+  layer,
   memoryKeyring,
   SERVICE,
   type Backend,
