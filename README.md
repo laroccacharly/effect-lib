@@ -3,13 +3,55 @@
 Small [Effect](https://effect.website) building blocks in one package, one subpath export each. `effect` (4.0.0) is a peer dependency.
 
 ```sh
-bun add github:laroccacharly/effect-lib#v0.1.0
+bun add github:laroccacharly/effect-lib#v0.2.0
 ```
 
 | Import | What it is |
 | --- | --- |
+| `effect-lib/credentials` | Typed secrets from the environment or the OS keyring, with `auth login | logout | status` commands |
 | `effect-lib/json-store` | A JSON file decoded and encoded with an Effect `Schema`, written atomically |
 | `effect-lib/systemd` | Install, reinstall, uninstall and inspect a systemd user service from an Effect CLI |
+
+## credentials
+
+Secrets an app declares by name, read from the environment variable of that name, otherwise from the OS keyring through `Bun.secrets`.
+
+```ts
+import * as Credentials from "effect-lib/credentials"
+
+const OpenRouterKey = Credentials.secret("OPENROUTER_API_KEY", { label: "OpenRouter API key" })
+const AdminEmail = Credentials.secret("ADMIN_EMAIL", { optional: true, sensitive: false, schema: Email })
+
+const key = yield* OpenRouterKey.resolve // Value<"OPENROUTER_API_KEY">: fails with reason "missing" when unset
+const email = yield* AdminEmail.resolve // Option<Value<"ADMIN_EMAIL">>
+
+Command.make("mybot").pipe(Command.withSubcommands([...Credentials.commands([OpenRouterKey, AdminEmail]), run]))
+```
+
+The types come from the declaration: the name becomes a brand, so a client taking `Value<"OPENROUTER_API_KEY">` rejects any other secret; `optional: true` makes `resolve` an `Option`; `schema` (a `Schema.Codec<A, string>`, default the text itself) decodes the trimmed text. A `Value` is a `Redacted`, so it never shows in logs.
+
+Every app stores under one keyring service, `effect-lib/credentials`, with the variable name as the entry name: apps that declare the same name share the value, so logging in once is enough.
+
+`commands` adds `auth login | logout | status`, plus `login` as a shortcut for `auth login`; the app needs nothing else.
+
+- `auth login` stores each secret the environment has, keeps what the keyring already has, and prompts for the rest (hidden input unless `sensitive: false`; empty skips an optional one). `--from-env` never prompts, for `cpass run -- mybot login`, and is implied without a terminal. `--force` prompts again, to rotate a key.
+- `auth logout` removes them from the keyring, for every app that uses them.
+- `auth status` prints where each comes from (`env`, `keyring` or missing) with a masked preview.
+
+The same steps are exported as Effects (`login`, `logout`, `status`).
+
+The keyring stays the source of truth; nothing is cached. A long-running process keeps its keyring connection, which goes stale when the keyring daemon restarts, so each read or write falls back to `Bun.secrets` in a fresh process (`process.execPath` with `BUN_BE_BUN=1`, so compiled binaries work too), and both are retried 3 times from 200ms while the daemon comes back. Failures are a `CredentialsError` whose `reason` is `missing`, `invalid` or `keyring`.
+
+`Keyring` is a `Context.Reference` that defaults to `bunKeyring()`, so nothing needs providing. Tests swap it and the environment:
+
+```ts
+effect.pipe(
+  Effect.provideService(Credentials.Keyring, Credentials.memoryKeyring({ OPENROUTER_API_KEY: "test" })),
+  Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnvRecord({}))
+)
+```
+
+`CREDENTIALS_SMOKE=1 bun test credentials` also round-trips through the real keyring, under its own service.
 
 ## json-store
 
