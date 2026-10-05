@@ -1,4 +1,4 @@
-import { dirname } from "node:path"
+import { delimiter, dirname, isAbsolute, join, sep } from "node:path"
 import { Console, Effect, FileSystem, Schema, Stream } from "effect"
 import { Command } from "effect/cli"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
@@ -36,11 +36,43 @@ export const isInstalled: (config: ServiceConfig) => Effect.Effect<boolean, Syst
   return yield* fs.exists(unitPath(config)).pipe(Effect.mapError((cause) => new SystemdServiceError({ message: cause.message })))
 })
 
+// A segment like 1.4.2, bun-1.4.2, v1 or 1: the path is one installed version of bun,
+// which an upgrade removes (mise, asdf, Homebrew's Cellar, nix).
+const isVersioned = (path: string) => path.split(sep).some((segment) => /\d+\.\d+/u.test(segment) || /^v?\d+$/u.test(segment))
+
+// The first `bun` on `searchPath` that is not inside a versioned install, like a mise shim, a `latest`
+// symlink or /usr/bin/bun, so the unit keeps working after bun is upgraded.
+export const stableBun: (searchPath?: string) => Effect.Effect<string, SystemdServiceError, FileSystem.FileSystem> = Effect.fn("stableBun")(function* stableBun(
+  searchPath = process.env["PATH"] ?? ""
+) {
+  const fs = yield* FileSystem.FileSystem
+  for (const directory of searchPath.split(delimiter)) {
+    const candidate = join(directory, "bun")
+    if (!isAbsolute(directory) || isVersioned(candidate)) {
+      continue
+    }
+    const isFile = yield* fs.stat(candidate).pipe(
+      Effect.map((info) => info.type === "File"),
+      Effect.orElseSucceed(() => false)
+    )
+    if (isFile) {
+      return candidate
+    }
+  }
+  return yield* new SystemdServiceError({
+    message: "no bun on PATH outside a versioned install; put a stable one first, like the mise shims directory",
+  })
+})
+
 const writeUnit: (config: ServiceConfig) => Effect.Effect<void, SystemdServiceError, Services> = Effect.fn("writeUnit")(function* writeUnit(config: ServiceConfig) {
   const fs = yield* FileSystem.FileSystem
   const path = unitPath(config)
+  if (!isAbsolute(config.script)) {
+    return yield* new SystemdServiceError({ message: `script must be an absolute path, got ${config.script}` })
+  }
+  const bun = yield* stableBun()
   yield* fs.makeDirectory(dirname(path), { recursive: true }).pipe(
-    Effect.andThen(fs.writeFileString(path, unitFile(config))),
+    Effect.andThen(fs.writeFileString(path, unitFile(config, bun))),
     Effect.mapError((cause) => new SystemdServiceError({ message: `could not write ${path}: ${cause.message}` }))
   )
   yield* systemctl(["daemon-reload"])

@@ -7,8 +7,10 @@ export interface ServiceConfig {
   // The unit is `<name>.service`.
   readonly name: string
   readonly description: string
-  // ExecStart, as argv; the program should be an absolute path.
-  readonly command: readonly [string, ...string[]]
+  // The service runs `bun <script> <args>`; the script is an absolute path, e.g. import.meta.filename.
+  // There is no way to name the runtime: install picks a bun that survives upgrades (see stableBun).
+  readonly script: string
+  readonly args?: readonly string[]
   // Added to the user manager's environment, not your shell's; only for what the service needs (see README).
   readonly environment?: Readonly<Record<string, string>>
   // Defaults to on-failure, after 30 seconds.
@@ -45,13 +47,14 @@ const execArgument = (argument: string) => {
 const section = (title: string, directives: ReadonlyArray<readonly [string, string]>, extra: Readonly<Record<string, string>> = {}) =>
   [`[${title}]`, ...[...directives, ...Object.entries(extra)].map(([key, value]) => `${key}=${value}`)].join("\n")
 
-export const unitFile = (config: ServiceConfig): string =>
+// `bun` is the runtime's absolute path, as stableBun resolves it.
+export const unitFile = (config: ServiceConfig, bun: string): string =>
   `${[
     section("Unit", [["Description", escapeSpecifiers(config.description)]], config.extra?.unit),
     section(
       "Service",
       [
-        ["ExecStart", config.command.map(execArgument).join(" ")],
+        ["ExecStart", [bun, config.script, ...(config.args ?? [])].map(execArgument).join(" ")],
         ...Object.entries(config.environment ?? {}).map(([key, value]): [string, string] => ["Environment", quote(escapeSpecifiers(`${key}=${value}`))]),
         ["Restart", config.restart ?? "on-failure"],
         ["RestartSec", String(config.restartSec ?? 30)],
