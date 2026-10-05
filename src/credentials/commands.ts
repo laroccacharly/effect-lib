@@ -1,6 +1,6 @@
-import { Console, Effect, Option, Redacted, type Terminal } from "effect"
+import { type Config, Console, Effect, Option, Redacted, type Terminal } from "effect"
 import { Command, Flag, Prompt } from "effect/cli"
-import { CredentialsError } from "./keyring.ts"
+import { CredentialsError, type Keyring } from "./keyring.ts"
 import type { SecretEntry } from "./secret.ts"
 
 export interface LoginOptions {
@@ -27,7 +27,11 @@ const promptFor = (entry: SecretEntry) => {
 
 // Stores each secret the environment has, keeps what the keyring already has, and prompts for the rest.
 // Without a terminal it behaves as `fromEnv`.
-export const login: (secrets: ReadonlyArray<SecretEntry>, options?: LoginOptions) => Effect.Effect<void, CredentialsError | Terminal.QuitError, Prompt.Environment> = Effect.fn(
+export const login: (secrets: ReadonlyArray<SecretEntry>, options?: LoginOptions) => Effect.Effect<
+  void,
+  CredentialsError | Config.ConfigError | Terminal.QuitError,
+  Prompt.Environment | Keyring
+> = Effect.fn(
   "credentials.login"
 )(function* login(secrets: ReadonlyArray<SecretEntry>, options: LoginOptions = {}) {
   const interactive = options.fromEnv !== true && process.stdin.isTTY
@@ -61,7 +65,7 @@ export const login: (secrets: ReadonlyArray<SecretEntry>, options?: LoginOptions
 })
 
 // Removes each secret from the keyring. Other apps that declare the same names lose them too.
-export const logout: (secrets: ReadonlyArray<SecretEntry>) => Effect.Effect<void, CredentialsError> = Effect.fn("credentials.logout")(function* logout(
+export const logout: (secrets: ReadonlyArray<SecretEntry>) => Effect.Effect<void, CredentialsError, Keyring> = Effect.fn("credentials.logout")(function* logout(
   secrets: ReadonlyArray<SecretEntry>
 ) {
   for (const entry of secrets) {
@@ -78,7 +82,7 @@ const preview = (entry: SecretEntry, text: string) => {
 }
 
 // Prints where each secret comes from, with a masked preview; a keyring failure is printed, not raised.
-export const status: (secrets: ReadonlyArray<SecretEntry>) => Effect.Effect<void> = Effect.fn("credentials.status")(function* status(secrets: ReadonlyArray<SecretEntry>) {
+export const status: (secrets: ReadonlyArray<SecretEntry>) => Effect.Effect<void, never, Keyring> = Effect.fn("credentials.status")(function* status(secrets: ReadonlyArray<SecretEntry>) {
   const width = Math.max(...secrets.map((entry) => entry.name.length))
   for (const entry of secrets) {
     const line = yield* entry.lookup.pipe(

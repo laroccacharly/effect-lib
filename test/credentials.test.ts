@@ -1,14 +1,13 @@
 import { expect, test } from "bun:test"
 import { BunServices } from "@effect/platform-bun"
-import { ConfigProvider, Effect, Option, Redacted, Schema } from "effect"
+import { Config, ConfigProvider, Effect, Option, Redacted, Schema } from "effect"
 import {
   type Backend,
   bunKeyring,
   freshProcess,
   fromBackends,
-  Keyring,
-  login,
-  logout,
+  type Keyring,
+  make,
   memoryKeyring,
   secret,
   type Value,
@@ -17,46 +16,51 @@ import {
 const ApiKey = secret("TEST_API_KEY", { label: "Test API key" })
 const Email = secret("TEST_EMAIL", { optional: true, sensitive: false, schema: Schema.String.check(Schema.isPattern(/^\S+@\S+$/u)) })
 const Port = secret("TEST_PORT", { schema: Schema.FiniteFromString })
+const credentials = make([ApiKey, Email, Port])
 
 // Runs with only `env` as the environment and `keyring` as the keyring, never the real ones.
-const run = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>, env: Record<string, string> = {}, keyring: Keyring = memoryKeyring()) =>
+const run = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices | Keyring>, env: Record<string, string> = {}, keyring: Keyring = memoryKeyring()) =>
   Effect.runPromise(
     effect.pipe(
-      Effect.provideService(Keyring, keyring),
+      Effect.provide(credentials.layer(keyring)),
       Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnvRecord(env)),
       Effect.provide(BunServices.layer)
     )
   )
 
 test("the environment wins over the keyring", async () => {
-  const key = await run(ApiKey.resolve, { TEST_API_KEY: "from-env" }, memoryKeyring({ TEST_API_KEY: "stored" }))
+  const key = await run(ApiKey.config, { TEST_API_KEY: "from-env" }, memoryKeyring({ TEST_API_KEY: "stored" }))
   expect(Redacted.value(key)).toBe("from-env")
 })
 
-test("falls back to the keyring when the environment is unset or blank, trimming the value", async () => {
-  const key = await run(ApiKey.resolve, { TEST_API_KEY: "  " }, memoryKeyring({ TEST_API_KEY: " stored\n" }))
+test("falls back to the keyring when the environment is unset or empty, trimming the value", async () => {
+  const key = await run(ApiKey.config, { TEST_API_KEY: "" }, memoryKeyring({ TEST_API_KEY: " stored\n" }))
   expect(Redacted.value(key)).toBe("stored")
 })
 
+test("plain Config reads declared secrets from the keyring, and only those", async () => {
+  const keyring = memoryKeyring({ TEST_API_KEY: "stored", OTHER: "hidden" })
+  expect(Redacted.value(await run(Config.Redacted("TEST_API_KEY"), {}, keyring))).toBe("stored")
+  expect(await run(Config.option(Config.String("OTHER")), {}, keyring)).toEqual(Option.none())
+})
+
 test("a missing required secret fails; a missing optional one is none", async () => {
-  const error = await run(Effect.flip(ApiKey.resolve))
-  expect(error.reason).toBe("missing")
-  expect(error.message).toContain("TEST_API_KEY")
-  expect(await run(Email.resolve)).toEqual(Option.none())
+  const error = await run(Effect.flip(ApiKey.config))
+  expect(error.message).toContain("export TEST_API_KEY")
+  expect(await run(Email.config)).toEqual(Option.none())
 })
 
 test("decodes with the schema and rejects values that do not match", async () => {
-  expect(Redacted.value(await run(Port.resolve, { TEST_PORT: "8080" }))).toBe(8080)
-  const error = await run(Effect.flip(Email.resolve), {}, memoryKeyring({ TEST_EMAIL: "not an email" }))
-  expect(error.reason).toBe("invalid")
-  expect(error.message).toContain("keyring")
+  expect(Redacted.value(await run(Port.config, { TEST_PORT: "8080" }))).toBe(8080)
+  const error = await run(Effect.flip(Email.config), {}, memoryKeyring({ TEST_EMAIL: "not an email" }))
+  expect(error.message).toContain("TEST_EMAIL")
 })
 
 test("values are typed and branded by name", async () => {
   const program = Effect.gen(function* () {
-    const key: Value<"TEST_API_KEY"> = yield* ApiKey.resolve
-    const email: Option.Option<Value<"TEST_EMAIL">> = yield* Email.resolve
-    const port: Value<"TEST_PORT", number> = yield* Port.resolve
+    const key: Value<"TEST_API_KEY"> = yield* ApiKey.config
+    const email: Option.Option<Value<"TEST_EMAIL">> = yield* Email.config
+    const port: Value<"TEST_PORT", number> = yield* Port.config
     // @ts-expect-error a key is not interchangeable with another secret's
     const wrong: Value<"OTHER_KEY"> = key
     return [key, email, port, wrong]
@@ -88,7 +92,7 @@ const working = (entries: Map<string, string>): Backend => ({
 test("recovers through the next backend when the first fails", async () => {
   const failures = { count: 0 }
   const keyring = fromBackends([failing(failures), working(new Map([["TEST_API_KEY", "recovered"]]))], { retryDelay: "1 millis" })
-  expect(Redacted.value(await run(ApiKey.resolve, {}, keyring))).toBe("recovered")
+  expect(Redacted.value(await run(ApiKey.config, {}, keyring))).toBe("recovered")
   expect(failures.count).toBe(1)
 })
 
@@ -105,34 +109,44 @@ test("retries while the keyring comes back, then reports every backend's failure
       return entries.get(name) ?? null
     },
   }
-  expect(Redacted.value(await run(ApiKey.resolve, {}, fromBackends([flaky], { retryDelay: "1 millis" })))).toBe("back")
+  expect(Redacted.value(await run(ApiKey.config, {}, fromBackends([flaky], { retryDelay: "1 millis" })))).toBe("back")
 
   const failures = { count: 0 }
   const keyring = fromBackends([failing(failures), failing(failures)], { retryDelay: "1 millis", retryTimes: 2 })
-  const error = await run(Effect.flip(ApiKey.resolve), {}, keyring)
-  expect(error.reason).toBe("keyring")
+  const error = await run(Effect.flip(ApiKey.config), {}, keyring)
+  expect(error._tag).toBe("ConfigError")
   expect(error.message).toContain("stale connection; then stale connection")
   expect(failures.count).toBe(6)
 })
 
 test("login --from-env stores the environment, keeps what is stored, and lists required secrets it lacks", async () => {
   const keyring = memoryKeyring({ TEST_PORT: "1" })
-  await run(login([ApiKey, Port, Email], { fromEnv: true }), { TEST_API_KEY: "new" }, keyring)
+  await run(make([ApiKey, Port, Email]).login({ fromEnv: true }), { TEST_API_KEY: "new" }, keyring)
   expect(await run(keyring.get("TEST_API_KEY"))).toEqual(Option.some("new"))
   expect(await run(keyring.get("TEST_PORT"))).toEqual(Option.some("1"))
 
-  const error = await run(Effect.flip(login([ApiKey, Port], { fromEnv: true })), {}, memoryKeyring())
+  const error = await run(Effect.flip(make([ApiKey, Port]).login({ fromEnv: true })), {}, memoryKeyring())
   expect(error._tag === "CredentialsError" && error.message).toContain("TEST_API_KEY, TEST_PORT")
 })
 
 test("login refuses an environment value that does not match the schema", async () => {
-  const error = await run(Effect.flip(login([Port], { fromEnv: true })), { TEST_PORT: "eighty" })
+  const error = await run(Effect.flip(make([Port]).login({ fromEnv: true })), { TEST_PORT: "eighty" })
   expect(error._tag === "CredentialsError" && error.reason).toBe("invalid")
+})
+
+test("lookup tells the environment from the keyring", async () => {
+  const keyring = memoryKeyring({ TEST_API_KEY: "stored", TEST_PORT: "1" })
+  const sources = await run(
+    Effect.all([ApiKey.lookup, Port.lookup, Email.lookup]).pipe(Effect.map((found) => found.map(Option.map((entry) => entry.source)))),
+    { TEST_API_KEY: "from-env" },
+    keyring
+  )
+  expect(sources).toEqual([Option.some("env"), Option.some("keyring"), Option.none()])
 })
 
 test("logout removes stored secrets", async () => {
   const keyring = memoryKeyring({ TEST_API_KEY: "k" })
-  await run(logout([ApiKey, Email]), {}, keyring)
+  await run(make([ApiKey, Email]).logout, {}, keyring)
   expect(await run(keyring.get("TEST_API_KEY"))).toEqual(Option.none())
 })
 
