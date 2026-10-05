@@ -3,7 +3,7 @@
 Small [Effect](https://effect.website) building blocks in one package, one subpath export each. `effect` (4.0.0) is a peer dependency.
 
 ```sh
-bun add github:laroccacharly/effect-lib#v0.6.0
+bun add github:laroccacharly/effect-lib#<tag>
 ```
 
 | Import | What it is |
@@ -113,5 +113,5 @@ Consumers pin a tag, so a new version is a new specifier and bun fetches it rath
 ```sh
 bun run typecheck && bun run lint && bun test
 # bump "version" in package.json, then:
-git commit -am "v0.6.0" && git tag v0.6.0 && git push origin main v0.6.0
+git commit -am "<tag>" && git tag <tag> && git push origin main <tag>
 ```
