@@ -3,7 +3,7 @@ import { hostname } from "node:os"
 import { ConfigProvider, Effect, Layer } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { layer as keyringLayer, memoryKeyring } from "../src/credentials/index.ts"
-import { layer, PulseClient } from "../src/pulse/index.ts"
+import { heartbeat, layer, PulseClient } from "../src/pulse/index.ts"
 
 interface Received {
   readonly method: string
@@ -60,4 +60,29 @@ test("a missing API key fails before calling the server", async () => {
   const error = await run(Effect.flip(ping("box-a")), {})
   expect(error._tag).toBe("CredentialsError")
   expect(received).toEqual([])
+})
+
+const runHeartbeat = (millis: number) =>
+  Effect.runPromise(
+    Effect.sleep(millis).pipe(
+      Effect.provide(heartbeat({ origin: server.url.origin, host: "box-a", interval: 20 }).pipe(Layer.provide([FetchHttpClient.layer, keyringLayer(memoryKeyring({ PULSE_API_KEY: "test-key" }))]))),
+      Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnvRecord({}))
+    )
+  )
+
+test("heartbeat pings right away and then on every interval", async () => {
+  await runHeartbeat(70)
+  expect(received.length).toBeGreaterThanOrEqual(3)
+  expect(received.every((request) => request.body.host === "box-a")).toBe(true)
+})
+
+test("heartbeat keeps pinging after a failed ping and stops with its scope", async () => {
+  status = 500
+  await runHeartbeat(50)
+  // Let a request already in flight when the scope closed land first.
+  await Bun.sleep(10)
+  const count = received.length
+  expect(count).toBeGreaterThanOrEqual(2)
+  await Bun.sleep(60)
+  expect(received.length).toBe(count)
 })

@@ -1,5 +1,5 @@
 import { hostname } from "node:os"
-import { Context, Effect, Layer, Redacted, Schema } from "effect"
+import { Context, Duration, Effect, Layer, Redacted, Schedule, Schema } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/http"
 import { type CredentialsError, Keyring, secret } from "../credentials/index.ts"
 
@@ -52,3 +52,24 @@ export const make = (options: PulseClientOptions = {}): Effect.Effect<PulseClien
 // Needs an HttpClient (FetchHttpClient.layer) and the Keyring the API key is read from.
 export const layer = (options: PulseClientOptions = {}): Layer.Layer<PulseClient, never, HttpClient.HttpClient | Keyring> =>
   Layer.effect(PulseClient, make(options))
+
+export interface HeartbeatOptions extends PulseClientOptions {
+  // Defaults to one hour, well under the server's alert delay.
+  readonly interval?: Duration.Input
+  // Defaults to this machine's hostname.
+  readonly host?: string
+}
+
+// Pings now and then every `interval` in a background fiber, for as long as the layer is alive.
+// A failed ping is logged and retried on the next tick, so it never takes the app down.
+export const heartbeat = (options: HeartbeatOptions = {}): Layer.Layer<never, never, HttpClient.HttpClient | Keyring> =>
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const client = yield* make(options)
+      yield* client.ping(options.host).pipe(
+        Effect.catch((error) => Effect.logWarning(`pulse heartbeat failed: ${error.message}`)),
+        Effect.repeat(Schedule.spaced(options.interval ?? Duration.hours(1))),
+        Effect.forkScoped
+      )
+    })
+  )
