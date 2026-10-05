@@ -3,13 +3,14 @@
 Small [Effect](https://effect.website) building blocks in one package, one subpath export each. `effect` (4.0.0) is a peer dependency.
 
 ```sh
-bun add github:laroccacharly/effect-lib#v0.4.0
+bun add github:laroccacharly/effect-lib#v0.5.0
 ```
 
 | Import | What it is |
 | --- | --- |
 | `effect-lib/credentials` | Typed secrets from the environment or the OS keyring, with `auth login | logout | status` commands |
 | `effect-lib/json-store` | A JSON file decoded and encoded with an Effect `Schema`, written atomically |
+| `effect-lib/pulse` | A client that pings the pulse server with `PULSE_API_KEY` |
 | `effect-lib/systemd` | Install, reinstall, uninstall and inspect a systemd user service from an Effect CLI |
 
 ## credentials
@@ -112,5 +113,5 @@ Consumers pin a tag, so a new version is a new specifier and bun fetches it rath
 ```sh
 bun run typecheck && bun run lint && bun test
 # bump "version" in package.json, then:
-git commit -am "v0.4.0" && git tag v0.4.0 && git push origin main v0.4.0
+git commit -am "v0.5.0" && git tag v0.5.0 && git push origin main v0.5.0
 ```
