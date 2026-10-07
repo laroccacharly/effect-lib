@@ -11,7 +11,8 @@ export interface ServiceConfig {
   // There is no way to name the runtime: install picks a bun that survives upgrades (see stableBun).
   readonly script: string
   readonly args?: readonly string[]
-  // Added to the user manager's environment, not your shell's; only for what the service needs (see README).
+  // Added to the user manager's environment, not your shell's; only for what the service needs, e.g. a minimal PATH.
+  // Keep secrets out: the unit is a plain file, so use extra.service.EnvironmentFile with a 0o600 file instead.
   readonly environment?: Readonly<Record<string, string>>
   // Defaults to on-failure, after 30 seconds.
   readonly restart?: Restart

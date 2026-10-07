@@ -1,17 +1,19 @@
 {
   "name": "effect-lib",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
   "description": "Small Effect building blocks, one subpath export each",
   "exports": {
     "./credentials": "./src/credentials/index.ts",
     "./json-store": "./src/json-store/index.ts",
+    "./openai-image": "./src/openai-image/index.ts",
     "./pulse": "./src/pulse/index.ts",
     "./systemd": "./src/systemd/index.ts"
   },
   "scripts": {
     "test": "bun test",
+    "test:live": "LIVE=1 bun test",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint"
   },
