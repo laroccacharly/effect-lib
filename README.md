@@ -1,6 +1,6 @@
 # effect-lib
 
-Small [Effect](https://effect.website) building blocks in one package, one subpath export each: credentials, JSON files, OpenAI images, pulse and systemd user services.
+Small [Effect](https://effect.website) building blocks in one package, one subpath export each: credentials, JSON files, OpenAI images, pulse, Pushover notifications and systemd user services.
 
 ## Requirements
 
