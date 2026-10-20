@@ -12,6 +12,8 @@ export class SystemdServiceError extends Schema.TaggedError<SystemdServiceError>
 
 type Services = FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
 
+const STDOUT = { true: "inherit", false: "ignore" } as const
+
 // Fails on a non-zero exit unless `inherit`, which streams stdout to the terminal and returns the exit code.
 const systemctl: (args: readonly string[], inherit?: boolean) => Effect.Effect<number, SystemdServiceError, ChildProcessSpawner.ChildProcessSpawner> = Effect.fn(
   "systemctl"
@@ -19,7 +21,7 @@ const systemctl: (args: readonly string[], inherit?: boolean) => Effect.Effect<n
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
   const [stderr, code] = yield* Effect.scoped(
     Effect.gen(function* () {
-      const handle = yield* spawner.spawn(ChildProcess.make("systemctl", ["--user", ...args], { stdout: inherit ? "inherit" : "ignore", stderr: "pipe" }))
+      const handle = yield* spawner.spawn(ChildProcess.make("systemctl", ["--user", ...args], { stdout: STDOUT[`${inherit}`], stderr: "pipe" }))
       return yield* Effect.all([Stream.mkString(Stream.decodeText(handle.stderr)), handle.exitCode], { concurrency: 2 })
     })
   ).pipe(Effect.mapError((cause) => new SystemdServiceError({ message: `could not run systemctl: ${cause.message}` })))
@@ -127,10 +129,24 @@ export const serviceCommand = (config: ServiceConfig, options: { readonly name?:
         Command.withDescription(`Rewrite ${unit} with the current settings and restart it`)
       ),
       Command.make("uninstall", {}, () =>
-        uninstall(config).pipe(Effect.flatMap((removed) => Console.log(removed ? `Stopped and removed ${unit}` : `${unit} is not installed`)))
+        uninstall(config).pipe(
+          Effect.flatMap((removed) => {
+            if (removed) {
+              return Console.log(`Stopped and removed ${unit}`)
+            }
+            return Console.log(`${unit} is not installed`)
+          })
+        )
       ).pipe(Command.withDescription(`Stop, disable and remove ${unit}`)),
       Command.make("status", {}, () =>
-        isInstalled(config).pipe(Effect.flatMap((installed) => (installed ? status(config) : Console.log(`${unit} is not installed`))))
+        isInstalled(config).pipe(
+          Effect.flatMap((installed) => {
+            if (installed) {
+              return status(config)
+            }
+            return Console.log(`${unit} is not installed`)
+          })
+        )
       ).pipe(Command.withDescription(`Show whether ${unit} is running, with its latest log lines`)),
     ])
   )

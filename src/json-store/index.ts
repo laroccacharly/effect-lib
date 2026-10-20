@@ -33,8 +33,13 @@ export const make = <A, I>(path: string, schema: Schema.Codec<A, I>, options: Js
   const load = Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const text = yield* fs.readFileString(path).pipe(
-      Effect.map(Option.some),
-      Effect.catchTag("PlatformError", (error) => (error.reason._tag === "NotFound" ? Effect.succeedNone : Effect.fail(error))),
+      Effect.asSome,
+      Effect.catchTag("PlatformError", (error) => {
+        if (error.reason._tag === "NotFound") {
+          return Effect.succeedNone
+        }
+        return Effect.fail(error)
+      }),
       Effect.mapError((error) => storeError("read", error))
     )
     if (Option.isNone(text)) {

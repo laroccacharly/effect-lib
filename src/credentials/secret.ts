@@ -99,7 +99,13 @@ export const secret = <const Name extends string, A = string, const Optional ext
     )
   )
 
-  const resolve = (optional ? resolveOption : resolveRequired) as Secret<Name, A, Optional>["resolve"]
+  const pickResolve = () => {
+    if (optional) {
+      return resolveOption
+    }
+    return resolveRequired
+  }
+  const resolve = pickResolve() as Secret<Name, A, Optional>["resolve"]
 
   const validate = (text: string) =>
     decode(text.trim()).pipe(

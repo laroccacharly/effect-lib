@@ -6,7 +6,7 @@ import { BunServices } from "@effect/platform-bun"
 import { Effect, Option, Schema } from "effect"
 import { make } from "../src/json-store/index.ts"
 
-const Settings = Schema.Struct({ interval: Schema.Number, name: Schema.optional(Schema.String) })
+const Settings = Schema.Struct({ interval: Schema.Finite, name: Schema.optional(Schema.String) })
 
 const run = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) => Effect.runPromise(Effect.provide(effect, BunServices.layer))
 

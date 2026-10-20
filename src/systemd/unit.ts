@@ -42,7 +42,10 @@ const quote = (value: string) => `"${value.replaceAll("\\", "\\\\").replaceAll('
 // ExecStart splits on whitespace and also expands $VARIABLES.
 const execArgument = (argument: string) => {
   const escaped = escapeSpecifiers(argument).replaceAll("$", "$$$$")
-  return escaped === "" || /[\s"'\\;]/u.test(escaped) ? quote(escaped) : escaped
+  if (escaped === "" || /[\s"'\\;]/u.test(escaped)) {
+    return quote(escaped)
+  }
+  return escaped
 }
 
 const section = (title: string, directives: ReadonlyArray<readonly [string, string]>, extra: Readonly<Record<string, string>> = {}) =>

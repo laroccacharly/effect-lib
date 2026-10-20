@@ -50,11 +50,16 @@ export class OpenAIImage extends Context.Service<
 const Images = Schema.Struct({ data: Schema.NonEmptyArray(Schema.Struct({ b64_json: Schema.String })) })
 const ErrorBody = Schema.fromJsonString(Schema.Struct({ error: Schema.Struct({ message: Schema.String }) }))
 
+// "auto" is sent as "high".
+const QUALITIES = { auto: "high", low: "low", medium: "medium", high: "high" } as const
+
+const BACKGROUNDS = { true: "transparent", false: "opaque" } as const
+
 const settings = (options: ImageOptions) => ({
   model: options.model ?? MODEL,
   size: options.size ?? SIZES[options.aspect ?? "auto"],
-  quality: options.quality === undefined || options.quality === "auto" ? "high" : options.quality,
-  background: options.transparent === true ? "transparent" : "opaque",
+  quality: QUALITIES[options.quality ?? "auto"],
+  background: BACKGROUNDS[`${options.transparent === true}`],
   output_format: "png",
 })
 
@@ -62,7 +67,7 @@ const settings = (options: ImageOptions) => ({
 const decodeImage = Effect.fnUntraced(function* (response: HttpClientResponse.HttpClientResponse) {
   if (response.status < 200 || response.status >= 300) {
     const text = yield* response.text
-    const message = Schema.decodeUnknownOption(ErrorBody)(text).pipe(
+    const message = Schema.decodeOption(ErrorBody)(text).pipe(
       Option.match({ onNone: () => text.slice(0, 500), onSome: (body) => body.error.message })
     )
     return yield* new OpenAIImageError({ message: `OpenAI Images answered ${response.status}: ${message}` })
@@ -87,7 +92,10 @@ export const make = (options: OpenAIImageOptions = {}): Effect.Effect<OpenAIImag
         Effect.provideService(Keyring, keyring),
         Effect.flatMap((key) => http.execute(HttpClientRequest.bearerToken(request, Redacted.value(key)))),
         Effect.flatMap(decodeImage),
-        Effect.mapError((error) => (error._tag === "CredentialsError" || error._tag === "OpenAIImageError" ? error : new OpenAIImageError({ message: `could not ${action} an image: ${error.message}` })))
+        Effect.catchTags({
+          HttpClientError: (error) => Effect.fail(new OpenAIImageError({ message: `could not ${action} an image: ${error.message}` })),
+          SchemaError: (error) => Effect.fail(new OpenAIImageError({ message: `could not ${action} an image: ${error.message}` })),
+        })
       )
 
     const generate: (prompt: string, options?: ImageOptions) => Effect.Effect<Uint8Array<ArrayBuffer>, OpenAIImageError | CredentialsError> = Effect.fn("OpenAIImage.generate")(function* generate(

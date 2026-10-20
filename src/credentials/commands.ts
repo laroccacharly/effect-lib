@@ -10,20 +10,48 @@ export interface LoginOptions {
   readonly force?: boolean
 }
 
+const promptMessage = (entry: SecretEntry) => {
+  const details: string[] = []
+  if (entry.label !== entry.name) {
+    details.push(entry.name)
+  }
+  if (entry.optional) {
+    details.push("empty to skip")
+  }
+  if (details.length === 0) {
+    return entry.label
+  }
+  return `${entry.label} (${details.join(", ")})`
+}
+
 const promptFor = (entry: SecretEntry) => {
-  const details = [...(entry.label === entry.name ? [] : [entry.name]), ...(entry.optional ? ["empty to skip"] : [])]
   const options = {
-    message: details.length === 0 ? entry.label : `${entry.label} (${details.join(", ")})`,
-    validate: (value: string) => {
+    message: promptMessage(entry),
+    validate: (value: string): Effect.Effect<string, string> => {
       const trimmed = value.trim()
+      if (trimmed === "" && entry.optional) {
+        return Effect.succeed("")
+      }
       if (trimmed === "") {
-        return entry.optional ? Effect.succeed("") : Effect.fail("required")
+        return Effect.fail("required")
       }
       return entry.validate(trimmed).pipe(Effect.as(trimmed))
     },
   }
-  return entry.sensitive ? Prompt.run(Prompt.Password(options)).pipe(Effect.map(Redacted.value)) : Prompt.run(Prompt.String(options))
+  if (entry.sensitive) {
+    return Prompt.run(Prompt.Password(options)).pipe(Effect.map(Redacted.value))
+  }
+  return Prompt.run(Prompt.String(options))
 }
+
+const promptAndSave = Effect.fnUntraced(function* (entry: SecretEntry) {
+  const text = yield* promptFor(entry)
+  if (text === "") {
+    return yield* Console.log(`Skipped ${entry.name}`)
+  }
+  yield* entry.save(text)
+  yield* Console.log(`Stored ${entry.name}`)
+})
 
 // Stores each secret the environment has, keeps what the keyring already has, and prompts for the rest.
 // Without a terminal it behaves as `fromEnv`.
@@ -40,13 +68,7 @@ export const login: (secrets: ReadonlyArray<SecretEntry>, options?: LoginOptions
     } else if (Option.isSome(found) && options.force !== true) {
       yield* Console.log(`${entry.name} is already stored`)
     } else if (interactive) {
-      const text = yield* promptFor(entry)
-      if (text === "") {
-        yield* Console.log(`Skipped ${entry.name}`)
-      } else {
-        yield* entry.save(text)
-        yield* Console.log(`Stored ${entry.name}`)
-      }
+      yield* promptAndSave(entry)
     } else if (!entry.optional) {
       missing.push(entry.name)
     }
@@ -65,8 +87,11 @@ export const logout: (secrets: ReadonlyArray<SecretEntry>) => Effect.Effect<void
   secrets: ReadonlyArray<SecretEntry>
 ) {
   for (const entry of secrets) {
-    const removed = yield* entry.remove
-    yield* Console.log(removed ? `Removed ${entry.name}` : `No stored ${entry.name}`)
+    if (yield* entry.remove) {
+      yield* Console.log(`Removed ${entry.name}`)
+      continue
+    }
+    yield* Console.log(`No stored ${entry.name}`)
   }
 })
 
@@ -74,7 +99,17 @@ const preview = (entry: SecretEntry, text: string) => {
   if (!entry.sensitive) {
     return text
   }
-  return text.length >= 16 ? `${text.slice(0, 4)}…${text.slice(-4)}` : "••••"
+  if (text.length < 16) {
+    return "••••"
+  }
+  return `${text.slice(0, 4)}…${text.slice(-4)}`
+}
+
+const unset = (entry: SecretEntry) => {
+  if (entry.optional) {
+    return "not set (optional)"
+  }
+  return "missing"
 }
 
 // Prints where each secret comes from, with a masked preview; a keyring failure is printed, not raised.
@@ -84,7 +119,7 @@ export const status: (secrets: ReadonlyArray<SecretEntry>) => Effect.Effect<void
     const line = yield* entry.lookup.pipe(
       Effect.map(
         Option.match({
-          onNone: () => (entry.optional ? "not set (optional)" : "missing"),
+          onNone: () => unset(entry),
           onSome: ({ source, text }) => `${source.padEnd(7)} ${preview(entry, Redacted.value(text))}`,
         })
       ),

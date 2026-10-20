@@ -1,14 +1,14 @@
 import { defineConfig } from "oxlint"
+import tsLint from "ts-lint/config"
 
 export default defineConfig({
-  jsPlugins: ["ts-lint"],
+  extends: [tsLint],
   options: {
     typeAware: true,
     typeCheck: true,
   },
   rules: {
     "ts-lint/no-unknown": "error",
-    "ts-lint/effect-fn-return-type": "error",
-    "ts-lint/no-undefined": "error",
+    "ts-lint/no-try-promise": "off",
   },
 })

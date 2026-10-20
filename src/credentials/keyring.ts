@@ -52,7 +52,7 @@ const fresh = async <A, I>(schema: Schema.Codec<A, I>, request: { readonly op: s
   if (code !== 0) {
     throw new Error(stderr.trim() || `keyring subprocess exited with ${code}`)
   }
-  return Schema.decodeUnknownSync(Schema.fromJsonString(schema))(stdout)
+  return Schema.decodeSync(Schema.fromJsonString(schema))(stdout)
 }
 
 // Bun.secrets in a new process, which opens a new keyring connection.
@@ -64,7 +64,12 @@ export const freshProcess = (service: string): Backend => ({
   remove: async (name) => await fresh(Schema.Boolean, { op: "delete", service, name }),
 })
 
-const describe = <C>(cause: C) => (cause instanceof Error ? cause.message : String(cause))
+const describe = <C>(cause: C) => {
+  if (cause instanceof Error) {
+    return cause.message
+  }
+  return String(cause)
+}
 
 export interface RecoveryOptions {
   // Retries back off exponentially from `retryDelay`; the defaults, 3 from 200ms, wait about 1.4s in total,
