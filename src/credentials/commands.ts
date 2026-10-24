@@ -6,16 +6,18 @@ import type { SecretEntry } from "./secret.ts"
 export interface LoginOptions {
   // Never prompt: store what the environment has and fail listing the required secrets it lacks.
   readonly fromEnv?: boolean
-  // Prompt again for secrets the keyring already has, e.g. to rotate a key.
+  // Prompt again for secrets the keyring already has, e.g. to rotate a key; empty keeps the stored value.
   readonly force?: boolean
 }
 
-const promptMessage = (entry: SecretEntry) => {
+const promptMessage = (entry: SecretEntry, stored: boolean) => {
   const details: string[] = []
   if (entry.label !== entry.name) {
     details.push(entry.name)
   }
-  if (entry.optional) {
+  if (stored) {
+    details.push("empty to keep")
+  } else if (entry.optional) {
     details.push("empty to skip")
   }
   if (details.length === 0) {
@@ -24,12 +26,13 @@ const promptMessage = (entry: SecretEntry) => {
   return `${entry.label} (${details.join(", ")})`
 }
 
-const promptFor = (entry: SecretEntry) => {
+// `stored` lets an empty answer keep the value the keyring already has.
+const promptFor = (entry: SecretEntry, stored: boolean) => {
   const options = {
-    message: promptMessage(entry),
+    message: promptMessage(entry, stored),
     validate: (value: string): Effect.Effect<string, string> => {
       const trimmed = value.trim()
-      if (trimmed === "" && entry.optional) {
+      if (trimmed === "" && (entry.optional || stored)) {
         return Effect.succeed("")
       }
       if (trimmed === "") {
@@ -44,8 +47,11 @@ const promptFor = (entry: SecretEntry) => {
   return Prompt.run(Prompt.String(options))
 }
 
-const promptAndSave = Effect.fnUntraced(function* (entry: SecretEntry) {
-  const text = yield* promptFor(entry)
+const promptAndSave = Effect.fnUntraced(function* (entry: SecretEntry, stored: boolean) {
+  const text = yield* promptFor(entry, stored)
+  if (text === "" && stored) {
+    return yield* Console.log(`Kept the stored ${entry.name}`)
+  }
   if (text === "") {
     return yield* Console.log(`Skipped ${entry.name}`)
   }
@@ -65,10 +71,10 @@ export const login: (secrets: ReadonlyArray<SecretEntry>, options?: LoginOptions
     if (Option.isSome(found) && found.value.source === "env") {
       yield* entry.save(Redacted.value(found.value.text))
       yield* Console.log(`Stored ${entry.name} from the environment`)
-    } else if (Option.isSome(found) && options.force !== true) {
+    } else if (Option.isSome(found) && (options.force !== true || !interactive)) {
       yield* Console.log(`${entry.name} is already stored`)
     } else if (interactive) {
-      yield* promptAndSave(entry)
+      yield* promptAndSave(entry, Option.isSome(found))
     } else if (!entry.optional) {
       missing.push(entry.name)
     }
@@ -134,7 +140,7 @@ const loginCommand = (secrets: ReadonlyArray<SecretEntry>, description: string) 
     "login",
     {
       fromEnv: Flag.Boolean("from-env").pipe(Flag.withDefault(false), Flag.withDescription("Never prompt; store only what the environment has")),
-      force: Flag.Boolean("force").pipe(Flag.withDefault(false), Flag.withDescription("Prompt again for secrets that are already stored")),
+      force: Flag.Boolean("force").pipe(Flag.withDefault(false), Flag.withDescription("Prompt again for secrets that are already stored; empty keeps them")),
     },
     (options) => login(secrets, options)
   ).pipe(Command.withDescription(description))

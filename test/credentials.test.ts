@@ -125,6 +125,12 @@ test("login --from-env stores the environment, keeps what is stored, and lists r
   expect(error._tag === "CredentialsError" && error.message).toContain("TEST_API_KEY, TEST_PORT")
 })
 
+test("login --force without a terminal keeps what is stored", async () => {
+  const keyring = memoryKeyring({ TEST_API_KEY: "stored" })
+  await run(make([ApiKey]).login({ fromEnv: true, force: true }), {}, keyring)
+  expect(await run(keyring.get("TEST_API_KEY"))).toEqual(Option.some("stored"))
+})
+
 test("login refuses an environment value that does not match the schema", async () => {
   const error = await run(Effect.flip(make([Port]).login({ fromEnv: true })), { TEST_PORT: "eighty" })
   expect(error._tag === "CredentialsError" && error.reason).toBe("invalid")
