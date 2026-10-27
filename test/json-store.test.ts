@@ -76,3 +76,25 @@ test("config unset removes optional keys only, and get fails on a key that is no
   expect(required.message).toContain("cannot unset interval")
   expect(await run(store.load)).toEqual(Option.some({ interval: 1 }))
 })
+
+const Nested = Schema.Struct({
+  sources: Schema.Record(Schema.String, Schema.Struct({ node: Schema.String, channels: Schema.optional(Schema.Finite) })),
+  tags: Schema.optional(Schema.Array(Schema.String)),
+})
+
+test("a dotted key reaches into nested objects for get, set and unset, still checked against the schema", async () => {
+  const store = make(await temporaryPath(), Nested)
+  await run(store.save({ sources: { mic: { node: "a", channels: 2 } }, tags: ["x"] }))
+  await run(set(store, Nested, "sources.mic.node", "b"))
+  await run(set(store, Nested, "sources.cam.node", "c"))
+  expect(await captureLogs(() => run(get(store, Nested, "sources.mic.node")))).toBe("b")
+  await run(unset(store, Nested, "sources.mic.channels"))
+  expect(await run(store.load)).toEqual(Option.some({ sources: { mic: { node: "b" }, cam: { node: "c" } }, tags: ["x"] }))
+  expect((await run(Effect.flip(get(store, Nested, "sources.mic.channels")))).reason).toBe("missing")
+  expect((await run(Effect.flip(get(store, Nested, "sources.mic.node.deeper")))).reason).toBe("missing")
+  expect((await run(Effect.flip(set(store, Nested, "sources.mic.nod", "d")))).message).toContain("cannot set sources.mic.nod to d")
+  expect((await run(Effect.flip(set(store, Nested, "sources.mic.node.deeper", "d")))).message).toContain("cannot set sources.mic.node.deeper: sources.mic.node is not an object")
+  expect((await run(Effect.flip(set(store, Nested, "tags.0", "y")))).message).toContain("tags is not an object")
+  expect((await run(Effect.flip(unset(store, Nested, "sources.mic.node")))).message).toContain("cannot unset sources.mic.node")
+  expect(await run(store.load)).toEqual(Option.some({ sources: { mic: { node: "b" }, cam: { node: "c" } }, tags: ["x"] }))
+})

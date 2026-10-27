@@ -1,4 +1,4 @@
-import { Console, Effect, FileSystem, Option, Schema } from "effect"
+import { Console, Effect, FileSystem, Option, Result, Schema } from "effect"
 import { Argument, Command } from "effect/cli"
 import { JsonStoreError, type JsonStore } from "./store.ts"
 
@@ -12,7 +12,7 @@ const invalid = (path: string, message: string) => new JsonStoreError({ path, re
 const encodeStored = <A, I>(store: JsonStore<A>, schema: Schema.Codec<A, I>, value: A) =>
   Schema.encodeEffect(schema)(value).pipe(Effect.mapError((error) => invalid(store.path, error.message)))
 
-// The stored value in its saved form, as an object since get, set and unset address one key; an empty object when the file does not exist.
+// The stored value in its saved form, as an object since get, set and unset address one key path; an empty object when the file does not exist.
 const loadEncodedObject = Effect.fnUntraced(function* <A, I>(store: JsonStore<A>, schema: Schema.Codec<A, I>) {
   const current = yield* store.load
   if (Option.isNone(current)) {
@@ -23,6 +23,63 @@ const loadEncodedObject = Effect.fnUntraced(function* <A, I>(store: JsonStore<A>
 })
 
 const decodeWithoutExtraKeys = <A, I>(schema: Schema.Codec<A, I>, object: Schema.JsonObject) => Schema.decodeUnknownEffect(schema)(object, { onExcessProperty: "error" })
+
+// A key path: `interval` is a top-level key, `sources.mic.node` the key `node` of the object at `sources.mic`.
+const pathOf = (key: string) => key.split(".")
+
+// The object with `key` set to `value`, built from entries: JsonObject's type reads as a class instance to the spread lint.
+const withKey = (object: Schema.JsonObject, key: string, value: Schema.Json): Schema.JsonObject => Object.fromEntries([...Object.entries(object), [key, value]])
+
+const isObject = (value: Schema.Json): value is Schema.JsonObject => typeof value === "object" && value !== null && !Array.isArray(value)
+
+const childOf = (object: Schema.JsonObject, key: string): Option.Option<Schema.Json> => {
+  if (!Object.hasOwn(object, key)) {
+    return Option.none()
+  }
+  return Option.fromUndefinedOr(object[key])
+}
+
+// The value at a key path, none when it is not set.
+const valueAt = (object: Schema.JsonObject, path: ReadonlyArray<string>): Option.Option<Schema.Json> => {
+  const [head = "", ...rest] = path
+  return Option.flatMap(childOf(object, head), (child) => {
+    if (rest.length === 0) {
+      return Option.some(child)
+    }
+    if (!isObject(child)) {
+      return Option.none()
+    }
+    return valueAt(child, rest)
+  })
+}
+
+// The object with the value at a key path replaced, creating the objects on the way; fails at a part of the path that holds something other than an object.
+const withValueAt = (object: Schema.JsonObject, path: ReadonlyArray<string>, value: Schema.Json, at = ""): Result.Result<Schema.JsonObject, string> => {
+  const [head = "", ...rest] = path
+  if (rest.length === 0) {
+    return Result.succeed(withKey(object, head, value))
+  }
+  const here = [at, head].filter((part) => part !== "").join(".")
+  const child = Option.getOrElse(childOf(object, head), (): Schema.Json => ({}))
+  if (!isObject(child)) {
+    return Result.fail(`${here} is not an object`)
+  }
+  return Result.map(withValueAt(child, rest, value, here), (updated) => withKey(object, head, updated))
+}
+
+// The object without the value at a key path, none when it is not set.
+const withoutValueAt = (object: Schema.JsonObject, path: ReadonlyArray<string>): Option.Option<Schema.JsonObject> => {
+  const [head = "", ...rest] = path
+  return Option.flatMap(childOf(object, head), (child) => {
+    if (rest.length === 0) {
+      return Option.some(Object.fromEntries(Object.entries(object).filter(([name]) => name !== head)))
+    }
+    if (!isObject(child)) {
+      return Option.none()
+    }
+    return Option.map(withoutValueAt(child, rest), (updated) => withKey(object, head, updated))
+  })
+}
 
 // Strings print as plain text so scripts can use them directly; everything else prints as JSON.
 const formatValue = (value: Schema.Json) => {
@@ -44,45 +101,48 @@ export const list: <A, I>(store: JsonStore<A>, schema: Schema.Codec<A, I>) => Ef
   yield* Console.log(JSON.stringify(yield* encodeStored(store, schema, value.value), null, 2))
 })
 
-// Prints one top-level key as it is saved, and fails when it is not set.
+// Prints the value at a key path as it is saved, and fails when it is not set.
 export const get: <A, I>(store: JsonStore<A>, schema: Schema.Codec<A, I>, key: string) => Effect.Effect<void, JsonStoreError, FileSystem.FileSystem> = Effect.fn("jsonStore.get")(function* get<
   A,
   I,
 >(store: JsonStore<A>, schema: Schema.Codec<A, I>, key: string) {
-  const encoded = yield* loadEncodedObject(store, schema)
-  const value = encoded[key]
-  if (!Object.hasOwn(encoded, key) || value === undefined) {
+  const value = valueAt(yield* loadEncodedObject(store, schema), pathOf(key))
+  if (Option.isNone(value)) {
     return yield* new JsonStoreError({ path: store.path, reason: "missing", message: `${store.path}: ${key} is not set` })
   }
-  yield* Console.log(formatValue(value))
+  yield* Console.log(formatValue(value.value))
 })
 
-// Sets one top-level key, starting from an empty object when the file does not exist, and saves only if the result matches the schema.
+// Sets the value at a key path, starting from an empty object when the file does not exist and creating the objects on the way, and saves only if the
+// result matches the schema.
 export const set: <A, I>(store: JsonStore<A>, schema: Schema.Codec<A, I>, key: string, text: string) => Effect.Effect<void, JsonStoreError, FileSystem.FileSystem> = Effect.fn(
   "jsonStore.set"
 )(function* set<A, I>(store: JsonStore<A>, schema: Schema.Codec<A, I>, key: string, text: string) {
   const encoded = yield* loadEncodedObject(store, schema)
-  const attempts = candidateValues(text).map((value) => decodeWithoutExtraKeys(schema, { ...encoded, [key]: value }))
+  // Whether a part of the path is not an object does not depend on the value.
+  const candidates = yield* Effect.forEach(candidateValues(text), (value) => Effect.fromResult(withValueAt(encoded, pathOf(key), value))).pipe(
+    Effect.mapError((message: string) => invalid(store.path, `cannot set ${key}: ${message}`))
+  )
+  const attempts = candidates.map((candidate) => decodeWithoutExtraKeys(schema, candidate))
   const updated = yield* Effect.firstSuccessOf(attempts).pipe(Effect.mapError((error) => invalid(store.path, `cannot set ${key} to ${text}: ${error.message}`)))
   yield* store.save(updated)
   yield* Console.log(`Set ${key} in ${store.path}`)
 })
 
-// Removes one top-level key; the schema refuses it for required keys, so only optional ones can be unset.
+// Removes the value at a key path; the schema refuses it for required keys, so only optional ones can be unset.
 export const unset: <A, I>(store: JsonStore<A>, schema: Schema.Codec<A, I>, key: string) => Effect.Effect<void, JsonStoreError, FileSystem.FileSystem> = Effect.fn("jsonStore.unset")(
   function* unset<A, I>(store: JsonStore<A>, schema: Schema.Codec<A, I>, key: string) {
-    const encoded = yield* loadEncodedObject(store, schema)
-    if (!Object.hasOwn(encoded, key)) {
+    const rest = withoutValueAt(yield* loadEncodedObject(store, schema), pathOf(key))
+    if (Option.isNone(rest)) {
       return yield* Console.log(`${key} is not set in ${store.path}`)
     }
-    const { [key]: _removed, ...rest } = encoded
-    const updated = yield* decodeWithoutExtraKeys(schema, rest).pipe(Effect.mapError((error) => invalid(store.path, `cannot unset ${key}: ${error.message}`)))
+    const updated = yield* decodeWithoutExtraKeys(schema, rest.value).pipe(Effect.mapError((error) => invalid(store.path, `cannot unset ${key}: ${error.message}`)))
     yield* store.save(updated)
     yield* Console.log(`Unset ${key} in ${store.path}`)
   }
 )
 
-const keyArgument = Argument.String("key").pipe(Argument.withDescription("Top-level key"))
+const keyArgument = Argument.String("key").pipe(Argument.withDescription("Key, or a dotted path to a nested key, like sources.mic.node"))
 
 // `<name> get | set | unset | list` for this store; add it to the root command's subcommands.
 export const commands = <A, I>(store: JsonStore<A>, schema: Schema.Codec<A, I>, name = "config") =>
