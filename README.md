@@ -1,6 +1,6 @@
 # effect-lib
 
-Small [Effect](https://effect.website) building blocks in one package, one subpath export each: credentials, JSON files, OpenAI images, pulse, Pushover notifications, OpenRouter speech-to-text and systemd user services.
+Small [Effect](https://effect.website) building blocks in one package, one subpath export each: credentials, JSON files, OpenAI images, pulse, Pushover notifications, OpenRouter speech-to-text, systemd user services and Tailscale Serve.
 
 ## Requirements
 
