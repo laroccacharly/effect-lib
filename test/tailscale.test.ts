@@ -5,13 +5,18 @@ import { delimiter, join } from "node:path"
 import { BunServices } from "@effect/platform-bun"
 import { Effect } from "effect"
 import { Command } from "effect/cli"
-import { publicUrl, serve, tailscaleCommand, unserve, urlFromDnsName } from "../src/tailscale/index.ts"
+import { publicUrl, serve, tailscaleCommand, terminalQrCode, unserve, urlFromDnsName } from "../src/tailscale/index.ts"
 
 const run = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) => Effect.runPromise(Effect.provide(effect, BunServices.layer))
 
 test("the URL leaves out port 443 and the DNS name's trailing dot", () => {
   expect(urlFromDnsName("box.tail.ts.net.", 443)).toBe("https://box.tail.ts.net")
   expect(urlFromDnsName("box.tail.ts.net.", 8443)).toBe("https://box.tail.ts.net:8443")
+})
+
+test("a QR code refuses text longer than it can hold", async () => {
+  const error = await Effect.runPromise(Effect.flip(terminalQrCode(`https://${"a".repeat(100)}`)))
+  expect(error.message).toContain("longer than 106 bytes")
 })
 
 // A fake tailscale first on PATH: it logs each call, keeps the serve mappings in a JSON file and answers like the real CLI.
