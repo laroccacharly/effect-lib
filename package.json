@@ -1,9 +1,12 @@
 {
   "name": "effect-lib",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "private": true,
   "type": "module",
   "description": "Small Effect building blocks, one subpath export each",
+  "bin": {
+    "elib": "./src/cli.ts"
+  },
   "exports": {
     "./credentials": "./src/credentials/index.ts",
     "./json-store": "./src/json-store/index.ts",
@@ -20,12 +23,13 @@
     "lint": "oxlint . && ts-lint-effect"
   },
   "peerDependencies": {
+    "@effect/platform-bun": "^4.0.0",
     "effect": "^4.0.0"
   },
   "devDependencies": {
-    "@effect/platform-bun": "4.0.5",
+    "@effect/platform-bun": "4.0.7",
     "@types/bun": "^1.4.2",
-    "effect": "4.0.5",
+    "effect": "4.0.7",
     "oxlint": "^1.86.0",
     "oxlint-tsgolint": "^7.0.2003",
     "ts-lint": "github:laroccacharly/ts-lint#v0.6.0",
