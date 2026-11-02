@@ -6,23 +6,22 @@ import { make as makeCredentials } from "../credentials/make.ts"
 import type { Secret } from "../credentials/secret.ts"
 import { make as makeJsonStore } from "../json-store/index.ts"
 import type { JsonStore, JsonStoreError } from "../json-store/store.ts"
-import { CloudflareAccountId, WorkerCloudflareApiToken } from "./cloudflare.ts"
+import { CloudflareAccountId, cloudflareApiToken } from "./cloudflare.ts"
 import { type CommandLine, type DeployError, type Environment, runInTerminal, shellEnvironment } from "./process.ts"
 import { type Settings, type SettingsSchema, settingsEnvironment, settingsPath } from "./settings.ts"
 
 /** A secret the Worker needs, handed to alchemy as the environment variable of the same name. */
 export type AppSecret = Secret<string, string, boolean>
 
-/** The token alchemy deploys with, whatever its name. */
-export type CloudflareToken = Secret<string, string, false>
+type AppToken = ReturnType<typeof cloudflareApiToken>
 
 export interface DeployOptions<S extends Settings> {
   /** The app's name, for ~/.config/<app>/deploy.json. */
   readonly app: string
   /** The Worker's secrets, beyond the Cloudflare ones every app shares. */
   readonly secrets?: ReadonlyArray<AppSecret>
-  /** The token alchemy gets as CLOUDFLARE_API_TOKEN; WORKER_CLOUDFLARE_API_TOKEN when omitted. */
-  readonly cloudflareApiToken?: CloudflareToken
+  /** The name of the token alchemy gets as CLOUDFLARE_API_TOKEN, read from the environment, then the keyring; WORKER_CLOUDFLARE_API_TOKEN when omitted. */
+  readonly cloudflareApiToken?: string
   /** What deploying needs that isn't secret, like the domain; adds `config get | set | unset | list`. */
   readonly settings?: SettingsSchema<S>
   /** Runs before `deploy` and `plan`, like `["bun", "run", "build"]`, with the settings in its environment but no secret. */
@@ -54,7 +53,7 @@ const resolveSecret = Effect.fnUntraced(function* resolveSecret(secret: AppSecre
 const appSecretsEnvironment = (secrets: ReadonlyArray<AppSecret>) =>
   Effect.forEach(secrets, resolveSecret).pipe(Effect.map((entries) => Object.fromEntries(entries.flatMap(Option.toArray))))
 
-const cloudflareEnvironment = Effect.fnUntraced(function* cloudflareEnvironment(token: CloudflareToken) {
+const cloudflareEnvironment = Effect.fnUntraced(function* cloudflareEnvironment(token: AppToken) {
   return {
     CLOUDFLARE_API_TOKEN: yield* token.resolve,
     CLOUDFLARE_ACCOUNT_ID: Redacted.value(yield* CloudflareAccountId.resolve),
@@ -64,7 +63,7 @@ const cloudflareEnvironment = Effect.fnUntraced(function* cloudflareEnvironment(
 const savedSettings = <S extends Settings>(store: Option.Option<JsonStore<S>>) =>
   Option.match(store, { onNone: () => Effect.succeed({}), onSome: settingsEnvironment })
 
-const tokenOf = <S extends Settings>(options: DeployOptions<S>) => options.cloudflareApiToken ?? WorkerCloudflareApiToken
+const tokenOf = <S extends Settings>(options: DeployOptions<S>) => cloudflareApiToken(options.cloudflareApiToken)
 
 const allSecrets = <S extends Settings>(options: DeployOptions<S>) => [tokenOf(options), CloudflareAccountId, ...(options.secrets ?? [])]
 

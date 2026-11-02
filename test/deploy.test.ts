@@ -6,7 +6,7 @@ import { BunServices } from "@effect/platform-bun"
 import { ConfigProvider, Effect, Schema } from "effect"
 import { Command } from "effect/cli"
 import { layer, memoryKeyring, secret } from "../src/credentials/index.ts"
-import { CloudflareApiToken, type DeployOptions, make, type Settings } from "../src/deploy/index.ts"
+import { type DeployOptions, make, type Settings } from "../src/deploy/index.ts"
 
 const EmailAuthSecret = secret("EMAIL_AUTH_SECRET")
 const PushToken = secret("PUSH_TOKEN", { optional: true })
@@ -80,7 +80,7 @@ test("builds with the settings but no secret, then deploys with the keyring's to
 })
 
 test("an app can deploy with another token, such as CLOUDFLARE_API_TOKEN", async () => {
-  await runDeploy({ app: "demo", cloudflareApiToken: CloudflareApiToken }, [], {}, { CLOUDFLARE_API_TOKEN: "app-token", CLOUDFLARE_ACCOUNT_ID: "account" })
+  await runDeploy({ app: "demo", cloudflareApiToken: "CLOUDFLARE_API_TOKEN" }, [], {}, { CLOUDFLARE_API_TOKEN: "app-token", CLOUDFLARE_ACCOUNT_ID: "account" })
   expect((await readEnvFile("alchemy-env"))["CLOUDFLARE_API_TOKEN"]).toBe("app-token")
 })
 
