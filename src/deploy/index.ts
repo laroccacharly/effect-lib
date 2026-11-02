@@ -1,4 +1,4 @@
-export { CloudflareAccountId, WorkerCloudflareApiToken } from "./cloudflare.ts"
+export { CloudflareAccountId, CloudflareApiToken, WorkerCloudflareApiToken } from "./cloudflare.ts"
 export { make, reportFailure, type AppSecret, type DeployOptions } from "./make.ts"
 export { DeployError, type CommandLine } from "./process.ts"
 export { run } from "./run.ts"

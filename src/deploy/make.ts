@@ -13,11 +13,16 @@ import { type Settings, type SettingsSchema, settingsEnvironment, settingsPath }
 /** A secret the Worker needs, handed to alchemy as the environment variable of the same name. */
 export type AppSecret = Secret<string, string, boolean>
 
+/** The token alchemy deploys with, whatever its name. */
+export type CloudflareToken = Secret<string, string, false>
+
 export interface DeployOptions<S extends Settings> {
   /** The app's name, for ~/.config/<app>/deploy.json. */
   readonly app: string
   /** The Worker's secrets, beyond the Cloudflare ones every app shares. */
   readonly secrets?: ReadonlyArray<AppSecret>
+  /** The token alchemy gets as CLOUDFLARE_API_TOKEN; WORKER_CLOUDFLARE_API_TOKEN when omitted. */
+  readonly cloudflareApiToken?: CloudflareToken
   /** What deploying needs that isn't secret, like the domain; adds `config get | set | unset | list`. */
   readonly settings?: SettingsSchema<S>
   /** Runs before `deploy` and `plan`, like `["bun", "run", "build"]`, with the settings in its environment but no secret. */
@@ -49,9 +54,9 @@ const resolveSecret = Effect.fnUntraced(function* resolveSecret(secret: AppSecre
 const appSecretsEnvironment = (secrets: ReadonlyArray<AppSecret>) =>
   Effect.forEach(secrets, resolveSecret).pipe(Effect.map((entries) => Object.fromEntries(entries.flatMap(Option.toArray))))
 
-const cloudflareEnvironment = Effect.gen(function* cloudflareEnvironment() {
+const cloudflareEnvironment = Effect.fnUntraced(function* cloudflareEnvironment(token: CloudflareToken) {
   return {
-    CLOUDFLARE_API_TOKEN: yield* WorkerCloudflareApiToken.resolve,
+    CLOUDFLARE_API_TOKEN: yield* token.resolve,
     CLOUDFLARE_ACCOUNT_ID: Redacted.value(yield* CloudflareAccountId.resolve),
   }
 })
@@ -59,11 +64,13 @@ const cloudflareEnvironment = Effect.gen(function* cloudflareEnvironment() {
 const savedSettings = <S extends Settings>(store: Option.Option<JsonStore<S>>) =>
   Option.match(store, { onNone: () => Effect.succeed({}), onSome: settingsEnvironment })
 
-const allSecrets = (secrets: ReadonlyArray<AppSecret>) => [WorkerCloudflareApiToken, CloudflareAccountId, ...secrets]
+const tokenOf = <S extends Settings>(options: DeployOptions<S>) => options.cloudflareApiToken ?? WorkerCloudflareApiToken
+
+const allSecrets = <S extends Settings>(options: DeployOptions<S>) => [tokenOf(options), CloudflareAccountId, ...(options.secrets ?? [])]
 
 // The build never sees a secret, even one exported in the shell.
-const withoutSecrets = (env: Readonly<Record<string, string>>, secrets: ReadonlyArray<AppSecret>) => {
-  const names = new Set(allSecrets(secrets).map((secret) => secret.name))
+const withoutSecrets = <S extends Settings>(env: Readonly<Record<string, string>>, options: DeployOptions<S>) => {
+  const names = new Set(allSecrets(options).map((secret) => secret.name))
   return Object.fromEntries(Object.entries(env).filter(([name]) => !names.has(name)))
 }
 
@@ -71,9 +78,9 @@ const withoutSecrets = (env: Readonly<Record<string, string>>, secrets: Readonly
 const environments = Effect.fnUntraced(function* environments<S extends Settings>(options: DeployOptions<S>, store: Option.Option<JsonStore<S>>) {
   const settings = yield* savedSettings(store)
   const shell = shellEnvironment()
-  const cloudflare = yield* cloudflareEnvironment
+  const cloudflare = yield* cloudflareEnvironment(tokenOf(options))
   const secrets = yield* appSecretsEnvironment(options.secrets ?? [])
-  return { build: withoutSecrets({ ...settings, ...shell }, options.secrets ?? []), alchemy: { ...settings, ...shell, ...cloudflare, ...secrets } } satisfies Environments
+  return { build: withoutSecrets({ ...settings, ...shell }, options), alchemy: { ...settings, ...shell, ...cloudflare, ...secrets } } satisfies Environments
 })
 
 const stageArguments = (stage: Option.Option<string>) => Option.match(stage, { onNone: () => [], onSome: (name) => ["--stage", name] })
@@ -93,7 +100,7 @@ type Step = Effect.Effect<void, DeployError | CredentialsError | JsonStoreError,
 
 export const make = <S extends Settings>(options: DeployOptions<S>) => {
   const store = Option.map(Option.fromUndefinedOr(options.settings), (schema) => makeJsonStore(settingsPath(options.app), schema))
-  const credentials = makeCredentials(allSecrets(options.secrets ?? []))
+  const credentials = makeCredentials(allSecrets(options))
   const stage = stageArguments(Option.fromUndefinedOr(options.stage))
 
   const buildThenAlchemy = (args: ReadonlyArray<string>): Step =>
