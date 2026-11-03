@@ -6,7 +6,7 @@ import { make as makeCredentials } from "../credentials/make.ts"
 import type { Secret } from "../credentials/secret.ts"
 import { make as makeJsonStore } from "../json-store/index.ts"
 import type { JsonStore, JsonStoreError } from "../json-store/store.ts"
-import { CloudflareAccountId, cloudflareApiToken } from "./cloudflare.ts"
+import { CloudflareAccountId, cloudflareApiToken, workerUrl } from "./cloudflare.ts"
 import { waitForHealth } from "./health.ts"
 import { type CommandLine, type DeployError, type Environment, runInTerminal, shellEnvironment } from "./process.ts"
 import { type Settings, type SettingsSchema, settingsEnvironment, settingsPath } from "./settings.ts"
@@ -15,16 +15,15 @@ import { commitVersion } from "./version.ts"
 /** A secret the Worker needs, handed to alchemy as the environment variable of the same name. */
 export type AppSecret = Secret<string, string, boolean>
 
-/** Where the deployed Worker is reached, like `https://proxy.example.com`: a required secret, `sensitive: false` for a URL. */
-export type WorkerUrl = Secret<string, string, false>
-
 type AppToken = ReturnType<typeof cloudflareApiToken>
+
+type AppUrl = ReturnType<typeof workerUrl>
 
 export interface DeployOptions<S extends Settings> {
   /** The app's name, for ~/.config/<app>/deploy.json. */
   readonly app: string
-  /** Where the Worker is reached; handed to alchemy like the secrets, and `deploy` waits for its /health to answer the deployed version. */
-  readonly url: WorkerUrl
+  /** The name of the Worker's URL, like `PROXY_URL`, read from the environment, then the keyring: an https origin, handed to alchemy like the secrets. `deploy` and `check` wait for its /health to answer the version. */
+  readonly url: string
   /** The Worker's secrets, beyond the Cloudflare ones every app shares. */
   readonly secrets?: ReadonlyArray<AppSecret>
   /** The name of the token alchemy gets as CLOUDFLARE_API_TOKEN, read from the environment, then the keyring; WORKER_CLOUDFLARE_API_TOKEN when omitted. */
@@ -72,10 +71,12 @@ const savedSettings = <S extends Settings>(store: Option.Option<JsonStore<S>>) =
 
 const tokenOf = <S extends Settings>(options: DeployOptions<S>) => cloudflareApiToken(options.cloudflareApiToken)
 
+const urlOf = <S extends Settings>(options: DeployOptions<S>): AppUrl => workerUrl(options.url)
+
 // The url first, once, even when the app lists it among its secrets too.
 const appSecrets = <S extends Settings>(options: DeployOptions<S>): ReadonlyArray<AppSecret> => [
-  options.url,
-  ...(options.secrets ?? []).filter((secret) => secret.name !== options.url.name),
+  urlOf(options),
+  ...(options.secrets ?? []).filter((secret) => secret.name !== options.url),
 ]
 
 const allSecrets = <S extends Settings>(options: DeployOptions<S>) => [tokenOf(options), CloudflareAccountId, ...appSecrets(options)]
@@ -128,8 +129,15 @@ export const make = <S extends Settings>(options: DeployOptions<S>) => {
   const deploy = (adopting: boolean): Step =>
     Effect.gen(function* deploy() {
       const version = yield* buildThenAlchemy(["deploy", "--yes", ...adoptArguments(adopting)])
-      yield* waitForHealth(Redacted.value(yield* options.url.resolve), version)
+      yield* waitForHealth(Redacted.value(yield* urlOf(options).resolve), version)
     })
+
+  // Only the url: checking needs no Cloudflare secret, no build and no alchemy.
+  const check: Step = Effect.gen(function* check() {
+    const version = yield* commitVersion()
+    const healthUrl = yield* waitForHealth(Redacted.value(yield* urlOf(options).resolve), version)
+    yield* Console.log(`${healthUrl} answers ${version}`)
+  })
 
   // No --yes: alchemy shows what it would delete and asks first.
   const destroy: Step = Effect.gen(function* destroy() {
@@ -142,12 +150,15 @@ export const make = <S extends Settings>(options: DeployOptions<S>) => {
   const plan = Command.make("plan", { adopt }, (flags): Step => Effect.asVoid(buildThenAlchemy(["plan", ...adoptArguments(flags.adopt)]))).pipe(
     Command.withDescription("Build, then show what deploying would change")
   )
+  const checkCommand = Command.make("check", {}, () => check).pipe(
+    Command.withDescription("Wait for the Worker's /health to answer this checkout's version, as deploy does after deploying")
+  )
   const destroyCommand = Command.make("destroy", {}, () => destroy).pipe(Command.withDescription("Delete the deployed resources, after alchemy asks"))
   const config = Option.match(store, { onNone: () => [], onSome: (settings) => [settings.commands("config")] })
 
   const command = Command.make("deploy", { adopt }, (flags) => deploy(flags.adopt)).pipe(
     Command.withDescription(`Build ${options.app}, deploy it with alchemy, then wait for its /health to answer the deployed version`),
-    Command.withSubcommands([plan, destroyCommand, ...credentials.commands, ...config])
+    Command.withSubcommands([plan, checkCommand, destroyCommand, ...credentials.commands, ...config])
   )
 
   return { command, credentials }

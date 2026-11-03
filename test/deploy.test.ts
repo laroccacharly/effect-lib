@@ -8,7 +8,6 @@ import { Command } from "effect/cli"
 import { layer, memoryKeyring, secret } from "../src/credentials/index.ts"
 import { commitVersion, type DeployOptions, make, type Settings } from "../src/deploy/index.ts"
 
-const DemoUrl = secret("DEMO_URL", { sensitive: false })
 const EmailAuthSecret = secret("EMAIL_AUTH_SECRET")
 const PushToken = secret("PUSH_TOKEN", { optional: true })
 const DeploySettings = Schema.Struct({ PUBLIC_URL: Schema.optionalKey(Schema.String) })
@@ -89,7 +88,7 @@ const exists = async (name: string) => await Bun.file(join(project, name)).exist
 const recordBuildEnv = ["sh", "-c", 'env > "$0"', "build-env"] as const
 
 test("builds with the settings but no secret, then deploys with the keyring's token, the secrets and the settings", async () => {
-  const options = { app: "demo", url: DemoUrl, secrets: [EmailAuthSecret, PushToken], settings: DeploySettings, build: recordBuildEnv, stage: "prod" }
+  const options = { app: "demo", url: "DEMO_URL", secrets: [EmailAuthSecret, PushToken], settings: DeploySettings, build: recordBuildEnv, stage: "prod" }
   await runDeploy(options, ["config", "set", "PUBLIC_URL", "https://demo.example.com"])
   process.env["CLOUDFLARE_API_TOKEN"] = "shell-token"
   await runDeploy(options, [], { EMAIL_AUTH_SECRET: "signing-secret" })
@@ -115,7 +114,7 @@ test("the deployed version is the commit, -dirty with uncommitted changes", asyn
   expect(await projectVersion()).toBe(commit)
   await writeFile(join(project, "worker.ts"), "export default { changed: true }\n")
   served = Option.some(`${commit}-dirty`)
-  await runDeploy({ app: "demo", url: DemoUrl }, [])
+  await runDeploy({ app: "demo", url: "DEMO_URL" }, [])
   expect((await readEnvFile("alchemy-env"))["DEPLOY_VERSION"]).toBe(`${commit}-dirty`)
 })
 
@@ -128,32 +127,50 @@ test("deploy waits until /health answers the version just deployed", async () =>
   setTimeout(() => {
     served = deployed
   }, 600)
-  await runDeploy({ app: "demo", url: DemoUrl }, [])
+  await runDeploy({ app: "demo", url: "DEMO_URL" }, [])
   expect(healthChecks).toBeGreaterThan(1)
 })
 
 test("deploy fails when /health still answers another version after 10 seconds", async () => {
   served = Option.some("04a40f3")
-  const error = await runDeploy({ app: "demo", url: DemoUrl }, []).catch((failure: Error) => failure)
+  const error = await runDeploy({ app: "demo", url: "DEMO_URL" }, []).catch((failure: Error) => failure)
   expect(String(error)).toContain(`${worker.url.origin}/health still answers 04a40f3, not ${await projectVersion()}`)
 }, 15_000)
 
+test("check waits for /health to answer this checkout's version, with only the url and no alchemy", async () => {
+  const deployedVersion = await projectVersion()
+  served = Option.none()
+  setTimeout(() => {
+    served = Option.some(deployedVersion)
+  }, 300)
+  await runDeploy({ app: "demo", url: "DEMO_URL", secrets: [EmailAuthSecret], build: recordBuildEnv }, ["check"], {}, { DEMO_URL: worker.url.origin })
+  expect(healthChecks).toBeGreaterThan(1)
+  expect(await exists("build-env")).toBe(false)
+  expect(await exists("alchemy-args")).toBe(false)
+})
+
+test("a url that is no https origin fails before building", async () => {
+  const error = await runDeploy({ app: "demo", url: "DEMO_URL", build: recordBuildEnv }, [], {}, { ...stored, DEMO_URL: "http://demo.example.com" }).catch((failure: Error) => failure)
+  expect(String(error)).toContain("DEMO_URL")
+  expect(await exists("build-env")).toBe(false)
+})
+
 test("a checkout outside git fails before building", async () => {
   await rm(join(project, ".git"), { recursive: true })
-  const error = await runDeploy({ app: "demo", url: DemoUrl, build: recordBuildEnv }, []).catch((failure: Error) => failure)
+  const error = await runDeploy({ app: "demo", url: "DEMO_URL", build: recordBuildEnv }, []).catch((failure: Error) => failure)
   expect(String(error)).toContain("git describe failed")
   expect(await exists("build-env")).toBe(false)
 })
 
 test("an app can deploy with another token, such as CLOUDFLARE_API_TOKEN", async () => {
-  await runDeploy({ app: "demo", url: DemoUrl, cloudflareApiToken: "CLOUDFLARE_API_TOKEN" }, [], {}, { ...stored, CLOUDFLARE_API_TOKEN: "app-token" })
+  await runDeploy({ app: "demo", url: "DEMO_URL", cloudflareApiToken: "CLOUDFLARE_API_TOKEN" }, [], {}, { ...stored, CLOUDFLARE_API_TOKEN: "app-token" })
   expect((await readEnvFile("alchemy-env"))["CLOUDFLARE_API_TOKEN"]).toBe("app-token")
 })
 
 test("the build never sees a secret, even one exported in the shell", async () => {
   process.env["EMAIL_AUTH_SECRET"] = "shell-secret"
   process.env["WORKER_CLOUDFLARE_API_TOKEN"] = "shell-worker-token"
-  await runDeploy({ app: "demo", url: DemoUrl, secrets: [EmailAuthSecret], build: recordBuildEnv }, [], { EMAIL_AUTH_SECRET: "shell-secret" })
+  await runDeploy({ app: "demo", url: "DEMO_URL", secrets: [EmailAuthSecret], build: recordBuildEnv }, [], { EMAIL_AUTH_SECRET: "shell-secret" })
   const built = await readEnvFile("build-env")
   expect(built["EMAIL_AUTH_SECRET"]).toBeUndefined()
   expect(built["WORKER_CLOUDFLARE_API_TOKEN"]).toBeUndefined()
@@ -161,7 +178,7 @@ test("the build never sees a secret, even one exported in the shell", async () =
 })
 
 test("a variable in the shell wins over the saved setting", async () => {
-  const options = { app: "demo", url: DemoUrl, settings: DeploySettings }
+  const options = { app: "demo", url: "DEMO_URL", settings: DeploySettings }
   await runDeploy(options, ["config", "set", "PUBLIC_URL", "https://saved.example.com"])
   process.env["PUBLIC_URL"] = "https://shell.example.com"
   await runDeploy(options, [])
@@ -169,21 +186,21 @@ test("a variable in the shell wins over the saved setting", async () => {
 })
 
 test("a missing secret fails before building", async () => {
-  const error = await runDeploy({ app: "demo", url: DemoUrl, secrets: [EmailAuthSecret], build: recordBuildEnv }, []).catch((failure: Error) => failure)
+  const error = await runDeploy({ app: "demo", url: "DEMO_URL", secrets: [EmailAuthSecret], build: recordBuildEnv }, []).catch((failure: Error) => failure)
   expect(String(error)).toContain("EMAIL_AUTH_SECRET")
   expect(await exists("build-env")).toBe(false)
   expect(await exists("alchemy-args")).toBe(false)
 })
 
 test("plan --adopt runs alchemy plan with the version, with no build when none is wired, and never asks /health", async () => {
-  await runDeploy({ app: "demo", url: DemoUrl }, ["plan", "--adopt"])
+  await runDeploy({ app: "demo", url: "DEMO_URL" }, ["plan", "--adopt"])
   expect(await alchemyArgs()).toEqual(["plan", "--adopt"])
   expect((await readEnvFile("alchemy-env"))["DEPLOY_VERSION"]).toBe(await projectVersion())
   expect(healthChecks).toBe(0)
 })
 
 test("destroy leaves alchemy to ask before deleting", async () => {
-  await runDeploy({ app: "demo", url: DemoUrl, build: recordBuildEnv }, ["destroy"])
+  await runDeploy({ app: "demo", url: "DEMO_URL", build: recordBuildEnv }, ["destroy"])
   expect(await alchemyArgs()).toEqual(["destroy"])
   expect(await exists("build-env")).toBe(false)
   expect(healthChecks).toBe(0)
@@ -191,6 +208,6 @@ test("destroy leaves alchemy to ask before deleting", async () => {
 
 test("alchemy exiting with an error fails the deploy", async () => {
   process.env["FAKE_ALCHEMY_EXIT"] = "3"
-  const error = await runDeploy({ app: "demo", url: DemoUrl }, []).catch((failure: Error) => failure)
+  const error = await runDeploy({ app: "demo", url: "DEMO_URL" }, []).catch((failure: Error) => failure)
   expect(String(error)).toContain("bunx alchemy deploy --yes exited with 3")
 })

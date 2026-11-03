@@ -4,6 +4,7 @@
 //   bun run deploy config set EMAIL_FROM sign-in@example.com
 //   bun run deploy plan                           builds, then shows what would change
 //   bun run deploy                                builds, deploys, then waits for BENCH_URL/health to answer the deployed version
+//   bun run deploy check                          waits for BENCH_URL/health to answer this checkout's version
 //   bun run deploy status | logout | destroy
 //
 // alchemy gets CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, the url, every secret and every setting as environment
@@ -16,13 +17,6 @@ import { Schema } from "effect"
 import * as Credentials from "effect-lib/credentials"
 import * as Deploy from "effect-lib/deploy"
 
-/** Where the Worker is reached; the CLI reads it too. */
-const BenchUrl = Credentials.secret("BENCH_URL", {
-  label: "bench Worker URL",
-  schema: Schema.String.check(Schema.isPattern(/^https:\/\/[^/\s]+$/u, { expected: "an https origin without a path, e.g. https://bench.example.com" })),
-  sensitive: false,
-})
-
 /** Signs the sign-in links and the session cookies. */
 const EmailAuthSecret = Credentials.secret("EMAIL_AUTH_SECRET", { label: "Secret that signs the sign-in links" })
 
@@ -32,7 +26,8 @@ const CmailApiKey = Credentials.secret("CMAIL_API_KEY", { label: "cmail API key"
 Deploy.run(
   {
     app: "bench",
-    url: BenchUrl,
+    // Where the Worker is reached, read like the token: the environment, then the keyring. The CLI may declare it too.
+    url: "BENCH_URL",
     secrets: [EmailAuthSecret, CmailApiKey],
     // Saved in ~/.config/bench/deploy.json; a variable of the same name in the shell wins over it.
     settings: Schema.Struct({ EMAIL_FROM: Schema.optionalKey(Schema.String) }),

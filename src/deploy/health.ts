@@ -31,7 +31,7 @@ const askVersion = (healthUrl: string) =>
     Effect.orElseSucceed((): Answer => ({ _tag: "Unreachable" }))
   )
 
-/** Polls `<url>/health` until it answers JSON whose `version` is `version`, failing after 10 seconds. */
+/** Polls `<url>/health` until it answers JSON whose `version` is `version`, failing after 10 seconds; returns `<url>/health`. */
 export const waitForHealth = Effect.fnUntraced(function* waitForHealth(url: string, version: string) {
   const healthUrl = new URL("/health", url).href
   const lastAnswer = yield* Ref.make(Option.none<Answer>())
@@ -45,4 +45,5 @@ export const waitForHealth = Effect.fnUntraced(function* waitForHealth(url: stri
   if (Option.isNone(answered)) {
     return yield* new DeployError({ message: describeAnswer(healthUrl, version, yield* Ref.get(lastAnswer)) })
   }
+  return healthUrl
 })
