@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, expect, test } from "bun:test"
 import { ConfigProvider, Effect, Layer } from "effect"
 import { FetchHttpClient } from "effect/http"
-import { layer as keyringLayer, memoryKeyring } from "../src/credentials/index.ts"
+import { envOnlyLayer, layer as keyringLayer, memoryKeyring } from "../src/credentials/index.ts"
 import { layer, Push } from "../src/push/index.ts"
 
 interface Received {
@@ -56,6 +56,27 @@ test("a rejected message fails with Pushover's reasons", async () => {
 
 test("missing credentials fail before calling Pushover", async () => {
   const error = await run(Effect.flip(Push.use((push) => push.notify("hi"))), {})
+  expect(error._tag).toBe("CredentialsError")
+  expect(received).toEqual([])
+})
+
+test("with envOnlyLayer, like on a Worker, both credentials come from the Config", async () => {
+  await Effect.runPromise(
+    Push.use((push) => push.notify("from a Worker")).pipe(
+      Effect.provide(layer({ origin: server.url.origin }).pipe(Layer.provide([FetchHttpClient.layer, envOnlyLayer]))),
+      Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown(credentials))
+    )
+  )
+  expect(received.map(({ body }) => body)).toEqual([{ token: "app-token", user: "user-key", message: "from a Worker" }])
+})
+
+test("with envOnlyLayer, a credential missing from the Config fails without a keyring", async () => {
+  const error = await Effect.runPromise(
+    Effect.flip(Push.use((push) => push.notify("hi"))).pipe(
+      Effect.provide(layer({ origin: server.url.origin }).pipe(Layer.provide([FetchHttpClient.layer, envOnlyLayer]))),
+      Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown({ PUSH_APP_TOKEN: "app-token" }))
+    )
+  )
   expect(error._tag).toBe("CredentialsError")
   expect(received).toEqual([])
 })

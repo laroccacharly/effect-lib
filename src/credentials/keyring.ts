@@ -125,3 +125,11 @@ export const memoryKeyring = (initial: Readonly<Record<string, string>> = {}): K
 export const Keyring: Context.Service<Keyring, Keyring> = Context.Service("effect-lib/credentials/Keyring")
 
 export const layer = (keyring: Keyring): Layer.Layer<Keyring> => Layer.succeed(Keyring)(keyring)
+
+// For runtimes without an OS keyring, like a Worker: every secret comes from the environment (Effect's Config),
+// and login fails instead of storing.
+export const envOnlyLayer: Layer.Layer<Keyring> = layer({
+  get: () => Effect.succeedNone,
+  set: (name) => Effect.fail(new CredentialsError({ name, reason: "keyring", message: `no keyring here: set ${name} in the environment` })),
+  remove: () => Effect.succeed(false),
+})

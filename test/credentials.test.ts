@@ -4,6 +4,7 @@ import { ConfigProvider, Effect, Option, Redacted, Schema } from "effect"
 import {
   type Backend,
   bunKeyring,
+  envOnlyLayer,
   freshProcess,
   fromBackends,
   type Keyring,
@@ -150,6 +151,17 @@ test("logout removes stored secrets", async () => {
   const keyring = memoryKeyring({ TEST_API_KEY: "k" })
   await run(make([ApiKey, Email]).logout, {}, keyring)
   expect(await run(keyring.get("TEST_API_KEY"))).toEqual(Option.none())
+})
+
+test("envOnlyLayer reads the environment only and refuses to store", async () => {
+  const resolveEnvOnly = <A, E>(effect: Effect.Effect<A, E, Keyring>, env: Record<string, string>) =>
+    Effect.runPromise(effect.pipe(Effect.provide(envOnlyLayer), Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnvRecord(env))))
+  const key = await resolveEnvOnly(ApiKey.resolve, { TEST_API_KEY: "from-env" })
+  expect(Redacted.value(key)).toBe("from-env")
+  const missing = await resolveEnvOnly(Effect.flip(ApiKey.resolve), {})
+  expect(missing.reason).toBe("missing")
+  const refused = await resolveEnvOnly(Effect.flip(ApiKey.save("k")), {})
+  expect(refused.message).toContain("set TEST_API_KEY in the environment")
 })
 
 // Touches the real OS keyring, under its own service: CREDENTIALS_SMOKE=1 bun test credentials

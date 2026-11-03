@@ -2,6 +2,7 @@ export { type LoginOptions } from "./commands.ts"
 export {
   bunKeyring,
   CredentialsError,
+  envOnlyLayer,
   freshProcess,
   fromBackends,
   inProcess,
