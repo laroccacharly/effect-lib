@@ -1,5 +1,5 @@
 import { Effect, Option, Ref, Schedule, Schema } from "effect"
-import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http"
+import { HttpClient, HttpClientResponse } from "effect/http"
 import * as CloudflareDns from "../cloudflare-dns/index.ts"
 import { DeployError } from "./process.ts"
 
@@ -42,8 +42,7 @@ export const waitForHealth = Effect.fnUntraced(function* waitForHealth(url: stri
     Effect.repeat({ until: isDeployed, schedule: Schedule.spaced("250 millis") }),
     Effect.timeoutOption("10 seconds"),
     // Through Cloudflare DNS: a just-created domain resolves at once, whatever the machine resolver cached.
-    Effect.provide(FetchHttpClient.layer),
-    Effect.provideService(FetchHttpClient.Fetch, CloudflareDns.fetch)
+    Effect.provide(CloudflareDns.layer())
   )
   if (Option.isNone(answered)) {
     return yield* new DeployError({ message: describeAnswer(healthUrl, version, yield* Ref.get(lastAnswer)) })
