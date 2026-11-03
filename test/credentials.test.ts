@@ -7,6 +7,7 @@ import {
   envOnlyLayer,
   freshProcess,
   fromBackends,
+  generate,
   type Keyring,
   layer,
   make,
@@ -151,6 +152,22 @@ test("logout removes stored secrets", async () => {
   const keyring = memoryKeyring({ TEST_API_KEY: "k" })
   await run(make([ApiKey, Email]).logout, {}, keyring)
   expect(await run(keyring.get("TEST_API_KEY"))).toEqual(Option.none())
+})
+
+test("generate stores a random key and replaces a stored one only when asked", async () => {
+  const keyring = memoryKeyring()
+  await run(generate("TEST_API_KEY"), {}, keyring)
+  const first = Option.getOrThrow(await run(keyring.get("TEST_API_KEY")))
+  expect(first).toMatch(/^[\w-]{43}$/u)
+
+  const error = await run(Effect.flip(generate("TEST_API_KEY")), {}, keyring)
+  expect(error.reason).toBe("exists")
+  expect(await run(keyring.get("TEST_API_KEY"))).toEqual(Option.some(first))
+
+  await run(generate("TEST_API_KEY", { overwrite: true }), {}, keyring)
+  const second = Option.getOrThrow(await run(keyring.get("TEST_API_KEY")))
+  expect(second).toMatch(/^[\w-]{43}$/u)
+  expect(second).not.toBe(first)
 })
 
 test("envOnlyLayer reads the environment only and refuses to store", async () => {

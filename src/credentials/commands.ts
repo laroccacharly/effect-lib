@@ -1,6 +1,6 @@
 import { Console, Effect, Option, Redacted, type Terminal } from "effect"
 import { Command, Flag, Prompt } from "effect/cli"
-import { CredentialsError, type Keyring } from "./keyring.ts"
+import { CredentialsError, Keyring } from "./keyring.ts"
 import type { SecretEntry } from "./secret.ts"
 
 export interface LoginOptions {
@@ -99,6 +99,31 @@ export const logout: (secrets: ReadonlyArray<SecretEntry>) => Effect.Effect<void
     }
     yield* Console.log(`No stored ${entry.name}`)
   }
+})
+
+export interface GenerateOptions {
+  // Replace a key the keyring already has.
+  readonly overwrite?: boolean
+}
+
+// 32 random bytes, base64url: 43 characters, safe in a header, a URL or an environment variable.
+const randomKey = () => crypto.getRandomValues(new Uint8Array(32)).toBase64({ alphabet: "base64url", omitPadding: true })
+
+// Stores a new random key under `name` in the keyring. Refuses to replace a stored one unless `overwrite`.
+export const generate: (name: string, options?: GenerateOptions) => Effect.Effect<void, CredentialsError, Keyring> = Effect.fn("credentials.generate")(function* generate(
+  name: string,
+  options: GenerateOptions = {}
+) {
+  const keyring = yield* Keyring
+  const stored = yield* keyring.get(name)
+  if (Option.isSome(stored) && options.overwrite !== true) {
+    return yield* new CredentialsError({ name, reason: "exists", message: `${name} is already in the keyring; pass --yes to replace it` })
+  }
+  yield* keyring.set(name, randomKey())
+  if (Option.isSome(stored)) {
+    return yield* Console.log(`Replaced ${name} with a new key`)
+  }
+  yield* Console.log(`Stored a new key as ${name}`)
 })
 
 const preview = (entry: SecretEntry, text: string) => {

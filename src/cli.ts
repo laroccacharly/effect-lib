@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
 import { BunRuntime, BunServices } from "@effect/platform-bun"
 import { Console, Effect, Layer, Redacted, Schema, Stream } from "effect"
-import { Argument, Command } from "effect/cli"
+import { Argument, Command, Flag } from "effect/cli"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import packageJson from "../package.json" with { type: "json" }
-import { bunKeyring, type CredentialsError, type Keyring, layer, secret } from "./credentials/index.ts"
+import { bunKeyring, type CredentialsError, generate, type Keyring, layer, secret } from "./credentials/index.ts"
 
 export class ClipboardError extends Schema.TaggedError<ClipboardError>()("ClipboardError", {
   message: Schema.String,
@@ -47,6 +47,14 @@ const keyringCommand = Command.make("keyring").pipe(
     Command.make("cp", { name: Argument.String("name").pipe(Argument.withDescription("Key name, like MY_API_KEY")) }, ({ name }) => copyKey(name)).pipe(
       Command.withDescription("Copy a key from the keyring to the clipboard")
     ),
+    Command.make(
+      "generate",
+      {
+        name: Argument.String("name").pipe(Argument.withDescription("Key name, like MY_API_KEY")),
+        yes: Flag.Boolean("yes").pipe(Flag.withDefault(false), Flag.withDescription("Replace the key if the keyring already has it")),
+      },
+      ({ name, yes }) => generate(name, { overwrite: yes })
+    ).pipe(Command.withDescription("Store a new random key in the keyring; never replaces one without --yes")),
   ])
 )
 
