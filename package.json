@@ -1,6 +1,6 @@
 {
   "name": "effect-lib",
-  "version": "0.27.0",
+  "version": "0.28.0",
   "private": true,
   "type": "module",
   "description": "Small Effect building blocks, one subpath export each",
@@ -8,6 +8,8 @@
     "elib": "./src/cli.ts"
   },
   "exports": {
+    "./cloudflare-dns": "./src/cloudflare-dns/index.ts",
+    "./cloudflare-dns/global": "./src/cloudflare-dns/global.ts",
     "./credentials": "./src/credentials/index.ts",
     "./deploy": "./src/deploy/index.ts",
     "./json-store": "./src/json-store/index.ts",
