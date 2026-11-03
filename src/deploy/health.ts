@@ -1,5 +1,5 @@
 import { Effect, Option, Ref, Schedule, Schema } from "effect"
-import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http"
+import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http"
 import { DeployError } from "./process.ts"
 
 const Health = Schema.Struct({ version: Schema.String })
@@ -18,9 +18,43 @@ const describeAnswer = (healthUrl: string, version: string, answer: Option.Optio
   return `could not reach ${healthUrl}`
 }
 
+const DnsAnswer = Schema.Struct({ Answer: Schema.optional(Schema.Array(Schema.Struct({ type: Schema.Finite, data: Schema.String }))) })
+
+const isLocal = (hostname: string) => hostname === "localhost" || /^[\d.]+$/u.test(hostname) || hostname.startsWith("[")
+
+// An IPv4 address for `hostname` from Cloudflare's DNS over HTTPS, reached by IP. It skips the machine's resolver, which
+// a VPN may point at a server that cached "not found" from before the Worker's domain existed. None when it has no answer
+// within 2 seconds, leaving the machine's resolver time within the 10 second wait.
+const resolveWithCloudflare = (hostname: string) =>
+  HttpClient.get("https://1.1.1.1/dns-query", { urlParams: { name: hostname, type: "A" }, headers: { accept: "application/dns-json" } }).pipe(
+    Effect.flatMap(HttpClientResponse.filterStatusOk),
+    Effect.flatMap(HttpClientResponse.schemaBodyJson(DnsAnswer)),
+    Effect.map(({ Answer }) => Option.fromNullishOr(Answer?.find((record) => record.type === 1)?.data)),
+    Effect.timeout("2 seconds"),
+    Effect.orElseSucceed(() => Option.none<string>())
+  )
+
+// GET `healthUrl` at the address Cloudflare's DNS gives, keeping the hostname for TLS and the Host header;
+// through the machine's resolver when the host is local or Cloudflare has no answer.
+const getHealth = Effect.fnUntraced(function* getHealth(healthUrl: string) {
+  const url = new URL(healthUrl)
+  if (isLocal(url.hostname)) {
+    return yield* HttpClient.get(healthUrl)
+  }
+  const address = yield* resolveWithCloudflare(url.hostname)
+  if (Option.isNone(address)) {
+    return yield* HttpClient.get(healthUrl)
+  }
+  const hostname = url.hostname
+  url.hostname = address.value
+  const request = HttpClientRequest.get(url).pipe(HttpClientRequest.setHeader("host", hostname))
+  // `tls.serverName` is Bun's: the certificate is checked against the hostname, not the address.
+  return yield* HttpClient.execute(request).pipe(Effect.provideService(FetchHttpClient.RequestInit, { tls: { serverName: hostname } } as RequestInit))
+})
+
 // Never fails: an unreachable Worker or a body without a version is an answer too.
 const askVersion = (healthUrl: string) =>
-  HttpClient.get(healthUrl).pipe(
+  getHealth(healthUrl).pipe(
     Effect.flatMap((response) =>
       HttpClientResponse.filterStatusOk(response).pipe(
         Effect.flatMap(HttpClientResponse.schemaBodyJson(Health)),
