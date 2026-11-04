@@ -12,6 +12,7 @@
     "./credentials": "./src/credentials/index.ts",
     "./deploy": "./src/deploy/index.ts",
     "./json-store": "./src/json-store/index.ts",
+    "./logger": "./src/logger/index.ts",
     "./openai-image": "./src/openai-image/index.ts",
     "./pulse": "./src/pulse/index.ts",
     "./push": "./src/push/index.ts",
@@ -31,9 +32,9 @@
     "effect": "^4.1.0"
   },
   "devDependencies": {
-    "@effect/platform-bun": "4.1.1",
+    "@effect/platform-bun": "4.1.2",
     "@types/bun": "^1.4.2",
-    "effect": "4.1.1",
+    "effect": "4.1.2",
     "oxlint": "^1.86.0",
     "oxlint-tsgolint": "^7.0.2003",
     "ts-lint": "github:laroccacharly/ts-lint#v0.6.0",

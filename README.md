@@ -1,6 +1,6 @@
 # effect-lib
 
-Small [Effect](https://effect.website) building blocks in one package, one subpath export each: Cloudflare DNS lookups, credentials, deploying a Worker with alchemy, JSON files, OpenAI images, pulse, Pushover notifications, OpenRouter speech-to-text, systemd user services and Tailscale Serve.
+Small [Effect](https://effect.website) building blocks in one package, one subpath export each: Cloudflare DNS lookups, credentials, deploying a Worker with alchemy, JSON files, logging to a file, OpenAI images, pulse, Pushover notifications, OpenRouter speech-to-text, systemd user services and Tailscale Serve.
 
 ## Requirements
 
