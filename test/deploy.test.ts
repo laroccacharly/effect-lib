@@ -6,7 +6,7 @@ import { BunServices } from "@effect/platform-bun"
 import { ConfigProvider, Effect, Option, Schema } from "effect"
 import { Command } from "effect/cli"
 import { layer, memoryKeyring, secret } from "../src/credentials/index.ts"
-import { commitVersion, type DeployOptions, make, type Settings } from "../src/deploy/index.ts"
+import { commitVersion, type DeployOptions, make, type Settings, workerVersion } from "../src/deploy/index.ts"
 
 const EmailAuthSecret = secret("EMAIL_AUTH_SECRET")
 const PushToken = secret("PUSH_TOKEN", { optional: true })
@@ -116,6 +116,12 @@ test("the deployed version is the commit, -dirty with uncommitted changes", asyn
   served = Option.some(`${commit}-dirty`)
   await runDeploy({ app: "demo", url: "DEMO_URL" }, [])
   expect((await readEnvFile("alchemy-env"))["DEPLOY_VERSION"]).toBe(`${commit}-dirty`)
+})
+
+test("a Worker's version is DEPLOY_VERSION, the commit where it is unset", async () => {
+  const versionWith = (env: Record<string, string>) => Effect.runPromise(workerVersion(project).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(env)))))
+  expect(await versionWith({ DEPLOY_VERSION: "abc1234" })).toBe("abc1234")
+  expect(await versionWith({})).toBe(await projectVersion())
 })
 
 test("deploy waits until /health answers the version just deployed", async () => {

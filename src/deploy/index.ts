@@ -3,4 +3,4 @@ export { make, reportFailure, type AppSecret, type DeployOptions } from "./make.
 export { DeployError, type CommandLine } from "./process.ts"
 export { run } from "./run.ts"
 export { settingsPath, type Settings, type SettingsSchema } from "./settings.ts"
-export { commitVersion } from "./version.ts"
+export { commitVersion, workerVersion } from "./version.ts"

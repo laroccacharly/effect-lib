@@ -11,7 +11,8 @@
 // variables, so alchemy.run.ts and the Worker read them with `Config.String("BENCH_URL")` or
 // `Config.Redacted("EMAIL_AUTH_SECRET")`. On `deploy` and `plan` it gets DEPLOY_VERSION too, the commit from
 // `git describe --always --dirty`: the Worker's /health answers it as JSON `{ "version": … }`. Where DEPLOY_VERSION is
-// unset, as under `alchemy dev`, `Deploy.commitVersion()` gives the same value.
+// unset, as under `alchemy dev`, `Deploy.commitVersion()` gives the same value: the Worker's props put
+// `DEPLOY_VERSION: yield* Deploy.workerVersion(import.meta.dir)` in its `env`, which gives either.
 
 import { Schema } from "effect"
 import * as Credentials from "effect-lib/credentials"
