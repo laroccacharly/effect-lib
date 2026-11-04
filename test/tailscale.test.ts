@@ -6,6 +6,7 @@ import { BunServices } from "@effect/platform-bun"
 import { Effect } from "effect"
 import { Command } from "effect/cli"
 import { publicUrl, serve, tailscaleCommand, terminalQrCode, unserve, urlFromDnsName } from "../src/tailscale/index.ts"
+import { qrMatrix } from "../src/tailscale/qr-matrix.ts"
 
 const run = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) => Effect.runPromise(Effect.provide(effect, BunServices.layer))
 
@@ -17,6 +18,24 @@ test("the URL leaves out port 443 and the DNS name's trailing dot", () => {
 test("a QR code refuses text longer than it can hold", async () => {
   const error = await Effect.runPromise(Effect.flip(terminalQrCode(`https://${"a".repeat(100)}`)))
   expect(error.message).toContain("longer than 106 bytes")
+})
+
+// The matrix as a PBM image, 4 pixels a module with a 4 module margin, for zbarimg.
+const pbm = (modules: ReadonlyArray<ReadonlyArray<boolean>>) => {
+  const side = (modules.length + 8) * 4
+  const pixel = (x: number, y: number) => Number(modules[Math.floor(y / 4) - 4]?.[Math.floor(x / 4) - 4] === true)
+  const rows = Array.from({ length: side }, (_, y) => Array.from({ length: side }, (_, x) => pixel(x, y)).join(" "))
+  return `P1\n${side} ${side}\n${rows.join("\n")}\n`
+}
+
+test.skipIf(Bun.which("zbarimg") === null)("QR codes decode back to their text, from a single letter to the longest that fits", () => {
+  const texts = ["a", "https://box.tail.ts.net", "https://gmk.tail2b871c.ts.net:8447", "héllo ✓", "x".repeat(43), "y".repeat(78), "z".repeat(106)]
+  for (const text of texts) {
+    const image = join(root, "qr.pbm")
+    writeFileSync(image, pbm(qrMatrix(new TextEncoder().encode(text))))
+    const decoded = Bun.spawnSync(["zbarimg", "--quiet", "--raw", image]).stdout.toString().trimEnd()
+    expect(decoded).toBe(text)
+  }
 })
 
 // A fake tailscale first on PATH: it logs each call, keeps the serve mappings in a JSON file and answers like the real CLI.
