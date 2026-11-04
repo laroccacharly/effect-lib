@@ -1,6 +1,6 @@
 {
   "name": "effect-lib",
-  "version": "0.30.0",
+  "version": "0.31.0",
   "private": true,
   "type": "module",
   "description": "Small Effect building blocks, one subpath export each",
@@ -23,7 +23,8 @@
     "test": "bun test",
     "test:live": "LIVE=1 bun test",
     "typecheck": "tsc --noEmit",
-    "lint": "oxlint . && ts-lint-effect"
+    "lint": "oxlint . && ts-lint-effect",
+    "release": "git add -A && git commit -m v$npm_package_version && git tag v$npm_package_version && git push origin main v$npm_package_version"
   },
   "peerDependencies": {
     "@effect/platform-bun": "^4.1.0",

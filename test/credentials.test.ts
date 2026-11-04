@@ -5,6 +5,7 @@ import {
   type Backend,
   bunKeyring,
   envOnlyLayer,
+  exists,
   freshProcess,
   fromBackends,
   generate,
@@ -168,6 +169,13 @@ test("generate stores a random key and replaces a stored one only when asked", a
   const second = Option.getOrThrow(await run(keyring.get("TEST_API_KEY")))
   expect(second).toMatch(/^[\w-]{43}$/u)
   expect(second).not.toBe(first)
+})
+
+test("exists finds a stored key and fails with missing for another, reading the keyring only", async () => {
+  const keyring = memoryKeyring({ TEST_API_KEY: "stored" })
+  await run(exists("TEST_API_KEY"), {}, keyring)
+  const error = await run(Effect.flip(exists("TEST_EMAIL")), { TEST_EMAIL: "me@example.com" }, keyring)
+  expect(error.reason).toBe("missing")
 })
 
 test("envOnlyLayer reads the environment only and refuses to store", async () => {

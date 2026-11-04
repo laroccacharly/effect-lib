@@ -1,4 +1,4 @@
-export { generate, type GenerateOptions, type LoginOptions } from "./commands.ts"
+export { exists, generate, type GenerateOptions, type LoginOptions } from "./commands.ts"
 export {
   bunKeyring,
   CredentialsError,

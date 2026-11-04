@@ -4,7 +4,7 @@ import { Console, Effect, Layer, Redacted, Schema, Stream } from "effect"
 import { Argument, Command, Flag } from "effect/cli"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import packageJson from "../package.json" with { type: "json" }
-import { bunKeyring, type CredentialsError, generate, type Keyring, layer, secret } from "./credentials/index.ts"
+import { bunKeyring, type CredentialsError, exists, generate, type Keyring, layer, secret } from "./credentials/index.ts"
 
 export class ClipboardError extends Schema.TaggedError<ClipboardError>()("ClipboardError", {
   message: Schema.String,
@@ -46,6 +46,9 @@ const keyringCommand = Command.make("keyring").pipe(
   Command.withSubcommands([
     Command.make("cp", { name: Argument.String("name").pipe(Argument.withDescription("Key name, like MY_API_KEY")) }, ({ name }) => copyKey(name)).pipe(
       Command.withDescription("Copy a key from the keyring to the clipboard")
+    ),
+    Command.make("exists", { name: Argument.String("name").pipe(Argument.withDescription("Key name, like MY_API_KEY")) }, ({ name }) => exists(name)).pipe(
+      Command.withDescription("Say whether the keyring has a key, without showing it; fails when it hasn't")
     ),
     Command.make(
       "generate",

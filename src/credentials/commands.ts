@@ -126,6 +126,15 @@ export const generate: (name: string, options?: GenerateOptions) => Effect.Effec
   yield* Console.log(`Stored a new key as ${name}`)
 })
 
+// Says whether the keyring has an entry `name`, never its value; fails with "missing" when it hasn't. The environment isn't read.
+export const exists: (name: string) => Effect.Effect<void, CredentialsError, Keyring> = Effect.fn("credentials.exists")(function* exists(name: string) {
+  const keyring = yield* Keyring
+  if (Option.isNone(yield* keyring.get(name))) {
+    return yield* new CredentialsError({ name, reason: "missing", message: `${name} is not in the keyring` })
+  }
+  yield* Console.log(`${name} is in the keyring`)
+})
+
 const preview = (entry: SecretEntry, text: string) => {
   if (!entry.sensitive) {
     return text
