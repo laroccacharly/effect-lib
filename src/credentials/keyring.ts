@@ -6,8 +6,8 @@ export const SERVICE = "effect-lib/credentials"
 export class CredentialsError extends Schema.TaggedError<CredentialsError>()("CredentialsError", {
   name: Schema.String,
   // missing: in neither the environment nor the keyring; invalid: does not match the schema; keyring: the OS keyring failed;
-  // exists: the keyring already has it and overwriting was not asked for.
-  reason: Schema.Literals(["missing", "invalid", "keyring", "exists"]),
+  // exists: the keyring already has it and overwriting was not asked for; locked: the keyring is locked, or refused the password to unlock it.
+  reason: Schema.Literals(["missing", "invalid", "keyring", "exists", "locked"]),
   message: Schema.String,
 }) {}
 
