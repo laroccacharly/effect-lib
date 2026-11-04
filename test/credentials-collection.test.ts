@@ -23,8 +23,10 @@ test.skipIf(withoutSecretService)("creates a keyring, stores in it, and only rea
       yield* keyring.set("API_KEY", "s3cret")
       expect(yield* keyring.get("API_KEY")).toEqual(Option.some("s3cret"))
 
+      yield* keyring.set("OTHER_KEY", "other")
       yield* control.lock
       expect(yield* control.isLocked).toBe(true)
+      expect(yield* keyring.names).toEqual(["API_KEY", "OTHER_KEY"])
       expect((yield* Effect.flip(keyring.get("API_KEY"))).reason).toBe("locked")
 
       const refused = yield* Effect.flip(control.unlock(Redacted.make("wrong")))
