@@ -15,6 +15,7 @@
     "./json-store": "./src/json-store/index.ts",
     "./logger": "./src/logger/index.ts",
     "./openai-image": "./src/openai-image/index.ts",
+    "./portless": "./src/portless/index.ts",
     "./pulse": "./src/pulse/index.ts",
     "./push": "./src/push/index.ts",
     "./stt": "./src/stt/index.ts",
