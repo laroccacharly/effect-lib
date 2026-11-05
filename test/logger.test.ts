@@ -142,3 +142,15 @@ test("logs show --follow leaves an entry still being written until it is complet
   )
   expect(output).toBe(entry)
 })
+
+test("withLogger flushes failures and preserves the original cause", async () => {
+  const { withLogger } = await import("../src/logger/index.ts")
+  const options = await temporaryOptions()
+  const error = new Error("cli-failure-check")
+  const exit = await Effect.runPromiseExit(withLogger(Effect.fail(error), options))
+  expect(exit._tag).toBe("Failure")
+  const entries = (await readFile(path(options), "utf8")).trim().split("\n").map((line) => JSON.parse(line))
+  expect(entries).toHaveLength(1)
+  expect(entries[0].level).toBe("ERROR")
+  expect(JSON.stringify(entries[0])).toContain("cli-failure-check")
+})
