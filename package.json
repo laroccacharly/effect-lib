@@ -18,7 +18,6 @@
     "./portless": "./src/portless/index.ts",
     "./pulse": "./src/pulse/index.ts",
     "./push": "./src/push/index.ts",
-    "./stt": "./src/stt/index.ts",
     "./systemd": "./src/systemd/index.ts",
     "./tailscale": "./src/tailscale/index.ts"
   },
