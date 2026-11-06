@@ -4,7 +4,7 @@ import { Console, Effect, Layer, Redacted, Schema, Stream } from "effect"
 import { Argument, Command, Flag } from "effect/cli"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import packageJson from "../package.json" with { type: "json" }
-import { bunKeyring, type CredentialsError, exists, generate, type Keyring, layer, secret } from "./credentials/index.ts"
+import { type CredentialsError, defaultKeyring, exists, generate, type Keyring, layer, secret } from "./credentials/index.ts"
 
 export class ClipboardError extends Schema.TaggedError<ClipboardError>()("ClipboardError", {
   message: Schema.String,
@@ -42,7 +42,7 @@ const copyKey: (name: string) => Effect.Effect<void, CredentialsError | Clipboar
 })
 
 const keyringCommand = Command.make("keyring").pipe(
-  Command.withDescription("Read the OS keyring entries shared by effect-lib apps"),
+  Command.withDescription("Read the vault, then the OS keyring entries shared by effect-lib apps"),
   Command.withSubcommands([
     Command.make("cp", { name: Argument.String("name").pipe(Argument.withDescription("Key name, like MY_API_KEY")) }, ({ name }) => copyKey(name)).pipe(
       Command.withDescription("Copy a key from the keyring to the clipboard")
@@ -63,4 +63,4 @@ const keyringCommand = Command.make("keyring").pipe(
 
 const elib = Command.make("elib").pipe(Command.withSubcommands([keyringCommand]))
 
-Command.run(elib, { version: packageJson.version }).pipe(Effect.provide(Layer.mergeAll(BunServices.layer, layer(bunKeyring()))), BunRuntime.runMain)
+Command.run(elib, { version: packageJson.version }).pipe(Effect.provide(Layer.mergeAll(BunServices.layer, layer(defaultKeyring()))), BunRuntime.runMain)

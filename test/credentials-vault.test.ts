@@ -26,7 +26,7 @@ const lookup = (name: string) => {
 // Runs `effect` while a vault serves on `socket`.
 const withVault = <A, E>(socket: string, effect: Effect.Effect<A, E>) => Effect.runPromise(Effect.scoped(Layer.build(vaultServer(lookup, { socket })).pipe(Effect.andThen(effect))))
 
-test("reads what the vault holds and falls back for the rest; writes only to the fallback", async () => {
+test("reads what the vault holds and falls back for the rest; writes only to the fallback, never for what the vault holds", async () => {
   const socket = freshSocket()
   const fallback = memoryKeyring({ VAULT_KEY: "stale", OTHER_KEY: "from-fallback" })
   const keyring = defaultKeyring({ socket, fallback })
@@ -35,8 +35,13 @@ test("reads what the vault holds and falls back for the rest; writes only to the
   expect(other).toEqual(Option.some("from-fallback"))
   expect(absent).toEqual(Option.none())
 
-  await withVault(socket, keyring.set("VAULT_KEY", "written"))
-  expect(await Effect.runPromise(fallback.get("VAULT_KEY"))).toEqual(Option.some("written"))
+  await withVault(socket, keyring.set("OTHER_KEY", "written"))
+  expect(await Effect.runPromise(fallback.get("OTHER_KEY"))).toEqual(Option.some("written"))
+  for (const name of ["VAULT_KEY", "LOCKED_KEY"]) {
+    expect((await withVault(socket, Effect.flip(keyring.set(name, "hidden")))).message).toContain("is in the vault")
+    expect((await withVault(socket, Effect.flip(keyring.remove(name)))).message).toContain("is in the vault")
+  }
+  expect(await Effect.runPromise(fallback.get("VAULT_KEY"))).toEqual(Option.some("stale"))
 })
 
 test("a secret in the locked vault fails as locked instead of reading the fallback's copy", async () => {

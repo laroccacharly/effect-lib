@@ -31,13 +31,15 @@ const askVault = (name: string, options: VaultOptions) =>
     return Option.some(yield* decodeAnswer(name, socket.value, response.value))
   })
 
+const couldNotRead = (name: string, message: string) => new CredentialsError({ name, reason: "keyring", message: `the vault could not read ${name}: ${message}` })
+
 // `missing` decides what a secret the vault does not hold resolves to.
 const valueOf = (name: string, missing: Effect.Effect<Option.Option<string>, CredentialsError>) =>
   VaultAnswer.match({
     found: ({ value }) => Effect.succeedSome(value),
     missing: () => missing,
     locked: ({ message }) => Effect.fail(new CredentialsError({ name, reason: "locked", message: `${name} is in the vault, which is locked: ${message}` })),
-    failed: ({ message }) => Effect.fail(new CredentialsError({ name, reason: "keyring", message: `the vault could not read ${name}: ${message}` })),
+    failed: ({ message }) => Effect.fail(couldNotRead(name, message)),
   })
 
 const readOnly = (name: string) =>
@@ -58,15 +60,34 @@ export const vaultKeyring = (options: VaultOptions = {}): Keyring => {
   }
 }
 
+const heldByVault = (name: string) =>
+  new CredentialsError({ name, reason: "keyring", message: `${name} is in the vault, which would hide a change to the OS keyring: change it with the vault's own commands` })
+
 // The vault first, then `fallback` for what it does not hold, or for everything while no vault runs.
-// A secret the locked vault holds fails rather than falling back, so a stale copy is never read; writes go to `fallback` only.
+// A secret the locked vault holds fails rather than falling back, so a stale copy is never read.
+// Writes go to `fallback`, except for a secret the vault holds, locked or not, whose fallback copy would never be read.
 export const defaultKeyring = (options: VaultOptions & { readonly fallback?: Keyring } = {}): Keyring => {
   const fallback = options.fallback ?? bunKeyring()
+
+  const unlessInVault = <A>(name: string, write: Effect.Effect<A, CredentialsError>) =>
+    askVault(name, options).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () => write,
+          onSome: VaultAnswer.match({
+            found: () => Effect.fail(heldByVault(name)),
+            locked: () => Effect.fail(heldByVault(name)),
+            missing: () => write,
+            failed: ({ message }) => Effect.fail(couldNotRead(name, message)),
+          }),
+        })
+      )
+    )
 
   return {
     get: (name) =>
       askVault(name, options).pipe(Effect.flatMap(Option.match({ onNone: () => fallback.get(name), onSome: valueOf(name, fallback.get(name)) }))),
-    set: fallback.set,
-    remove: fallback.remove,
+    set: (name, value) => unlessInVault(name, fallback.set(name, value)),
+    remove: (name) => unlessInVault(name, fallback.remove(name)),
   }
 }
