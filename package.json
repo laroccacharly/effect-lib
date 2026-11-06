@@ -10,7 +10,7 @@
   "exports": {
     "./cloudflare-dns": "./src/cloudflare-dns/index.ts",
     "./credentials": "./src/credentials/index.ts",
-    "./credentials/collection": "./src/credentials/collection/index.ts",
+    "./credentials/vault": "./src/credentials/vault/index.ts",
     "./deploy": "./src/deploy/index.ts",
     "./json-store": "./src/json-store/index.ts",
     "./logger": "./src/logger/index.ts",
@@ -41,8 +41,5 @@
     "oxlint-tsgolint": "^7.0.2003",
     "ts-lint": "github:laroccacharly/ts-lint#v0.6.0",
     "typescript": "^7.0.2"
-  },
-  "dependencies": {
-    "@particle/dbus-next": "^0.11.4"
   }
 }
