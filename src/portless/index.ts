@@ -1,2 +1,2 @@
 export * from "./server.ts"
-export * from "./socket.ts"
+export * from "../shared/socket-server.ts"

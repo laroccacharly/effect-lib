@@ -1,5 +1,5 @@
-import { homedir } from "node:os"
 import { join } from "node:path"
+import { configHome } from "../shared/xdg.ts"
 
 export type Restart = "no" | "always" | "on-success" | "on-failure" | "on-abnormal" | "on-abort" | "on-watchdog"
 
@@ -32,7 +32,7 @@ export interface ServiceConfig {
 export const unitName = (config: ServiceConfig): string => `${config.name}.service`
 
 export const unitPath = (config: ServiceConfig): string =>
-  join(config.unitDir ?? join(process.env["XDG_CONFIG_HOME"] || join(homedir(), ".config"), "systemd", "user"), unitName(config))
+  join(config.unitDir ?? join(configHome(), "systemd", "user"), unitName(config))
 
 // systemd expands %-specifiers in most values.
 const escapeSpecifiers = (value: string) => value.replaceAll("%", "%%")

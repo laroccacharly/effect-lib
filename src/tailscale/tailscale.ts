@@ -1,5 +1,6 @@
-import { Effect, Option, Schema, Stream } from "effect"
-import { ChildProcess, ChildProcessSpawner } from "effect/process"
+import { Effect, Option, Schema } from "effect"
+import { ChildProcess, type ChildProcessSpawner } from "effect/process"
+import { runToEnd } from "../shared/process.ts"
 
 export class TailscaleError extends Schema.TaggedError<TailscaleError>()("TailscaleError", {
   message: Schema.String,
@@ -32,17 +33,11 @@ type Spawner = ChildProcessSpawner.ChildProcessSpawner
 
 const commandLine = (args: readonly string[]) => `tailscale ${args.join(" ")}`
 
-const text = <E>(stream: Stream.Stream<Uint8Array, E>) => Stream.mkString(Stream.decodeText(stream))
-
-// Runs tailscale and returns its stdout, kept apart from stderr so warnings never corrupt JSON output; fails on a non-zero exit.
+// Runs tailscale and returns its stdout; fails on a non-zero exit.
 const tailscale: (args: readonly string[]) => Effect.Effect<string, TailscaleError, Spawner> = Effect.fn("tailscale")(function* tailscale(args: readonly string[]) {
-  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-  const [stdout, stderr, code] = yield* Effect.scoped(
-    Effect.gen(function* () {
-      const handle = yield* spawner.spawn(ChildProcess.make("tailscale", args))
-      return yield* Effect.all([text(handle.stdout), text(handle.stderr), handle.exitCode], { concurrency: 3 })
-    })
-  ).pipe(Effect.mapError((cause) => new TailscaleError({ message: `could not run ${commandLine(args)}: ${String(cause)}` })))
+  const { stdout, stderr, code } = yield* runToEnd(ChildProcess.make("tailscale", args)).pipe(
+    Effect.mapError((cause) => new TailscaleError({ message: `could not run ${commandLine(args)}: ${String(cause)}` }))
+  )
   if (code !== 0) {
     return yield* new TailscaleError({ message: `${commandLine(args)} exited with ${code}: ${(stderr || stdout).trim()}` })
   }

@@ -1,6 +1,6 @@
-import { homedir } from "node:os"
 import { join } from "node:path"
 import { type Duration, Effect, FileSystem, Logger } from "effect"
+import { stateHome } from "../shared/xdg.ts"
 
 export interface FileLogOptions {
   // Names the log file `<name>.log`, and its default directory.
@@ -14,7 +14,7 @@ export interface FileLogOptions {
 }
 
 // The file `layer` appends to.
-export const path = (options: FileLogOptions) => join(options.directory ?? stateDirectory(options.name), `${options.name}.log`)
+export const path = (options: FileLogOptions) => join(options.directory ?? join(stateHome(), options.name), `${options.name}.log`)
 
 // Appends every `Effect.log*` to `path(options)` as JSON lines, in a private directory and file.
 export const layer = (options: FileLogOptions) =>
@@ -29,5 +29,3 @@ export const layer = (options: FileLogOptions) =>
     ],
     { mergeWithExisting: options.console ?? true }
   )
-
-const stateDirectory = (name: string) => join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state"), name)

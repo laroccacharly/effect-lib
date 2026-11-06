@@ -1,7 +1,7 @@
 import { Console, Effect, Option, Redacted, type Terminal } from "effect"
 import { Command, Flag, Prompt } from "effect/cli"
 import { CredentialsError, Keyring } from "./keyring.ts"
-import type { SecretEntry } from "./secret.ts"
+import type { Found, SecretEntry } from "./secret.ts"
 
 export interface LoginOptions {
   // Never prompt: store what the environment has and fail listing the required secrets it lacks.
@@ -59,26 +59,57 @@ const promptAndSave = Effect.fnUntraced(function* (entry: SecretEntry, stored: b
   yield* Console.log(`Stored ${entry.name}`)
 })
 
+type LoginAction =
+  | { readonly _tag: "StoreFromEnv"; readonly text: string }
+  | { readonly _tag: "Keep" }
+  | { readonly _tag: "Prompt"; readonly stored: boolean }
+  | { readonly _tag: "Skip" }
+  | { readonly _tag: "Missing" }
+
+const loginAction = (entry: SecretEntry, found: Option.Option<Found>, options: LoginOptions, interactive: boolean): LoginAction => {
+  if (Option.isSome(found) && found.value.source === "env") {
+    return { _tag: "StoreFromEnv", text: Redacted.value(found.value.text) }
+  }
+  if (Option.isSome(found) && (options.force !== true || !interactive)) {
+    return { _tag: "Keep" }
+  }
+  if (interactive) {
+    return { _tag: "Prompt", stored: Option.isSome(found) }
+  }
+  if (entry.optional) {
+    return { _tag: "Skip" }
+  }
+  return { _tag: "Missing" }
+}
+
+const runLoginAction = (entry: SecretEntry, action: LoginAction) => {
+  switch (action._tag) {
+    case "StoreFromEnv":
+      return entry.save(action.text).pipe(Effect.andThen(Console.log(`Stored ${entry.name} from the environment`)))
+    case "Keep":
+      return Console.log(`${entry.name} is already stored`)
+    case "Prompt":
+      return promptAndSave(entry, action.stored)
+    case "Skip":
+    case "Missing":
+      return Effect.void
+  }
+}
+
+const loginEntry = Effect.fnUntraced(function* loginEntry(entry: SecretEntry, options: LoginOptions, interactive: boolean) {
+  const action = loginAction(entry, yield* entry.lookup, options, interactive)
+  yield* runLoginAction(entry, action)
+  return action
+})
+
 // Stores each secret the environment has, keeps what the keyring already has, and prompts for the rest.
 // Without a terminal it behaves as `fromEnv`.
 export const login: (secrets: ReadonlyArray<SecretEntry>, options?: LoginOptions) => Effect.Effect<void, CredentialsError | Terminal.QuitError, Prompt.Environment | Keyring> = Effect.fn(
   "credentials.login"
 )(function* login(secrets: ReadonlyArray<SecretEntry>, options: LoginOptions = {}) {
   const interactive = options.fromEnv !== true && process.stdin.isTTY
-  const missing: string[] = []
-  for (const entry of secrets) {
-    const found = yield* entry.lookup
-    if (Option.isSome(found) && found.value.source === "env") {
-      yield* entry.save(Redacted.value(found.value.text))
-      yield* Console.log(`Stored ${entry.name} from the environment`)
-    } else if (Option.isSome(found) && (options.force !== true || !interactive)) {
-      yield* Console.log(`${entry.name} is already stored`)
-    } else if (interactive) {
-      yield* promptAndSave(entry, Option.isSome(found))
-    } else if (!entry.optional) {
-      missing.push(entry.name)
-    }
-  }
+  const actions = yield* Effect.forEach(secrets, (entry) => loginEntry(entry, options, interactive))
+  const missing = secrets.filter((_, index) => actions[index]?._tag === "Missing").map((entry) => entry.name)
   if (missing.length > 0) {
     return yield* new CredentialsError({
       name: missing.join(", "),

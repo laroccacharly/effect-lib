@@ -23,6 +23,8 @@ const render = (modules: ReadonlyArray<ReadonlyArray<boolean>>): string => {
 // `text` as a QR code drawn with block characters, to scan the URL from a phone.
 export const terminalQrCode = (text: string): Effect.Effect<string, TailscaleError> => {
   const bytes = new TextEncoder().encode(text)
-  if (bytes.length > maxQrBytes) return Effect.fail(new TailscaleError({ message: `could not draw a QR code for ${text}: longer than ${maxQrBytes} bytes` }))
+  if (bytes.length > maxQrBytes) {
+    return Effect.fail(new TailscaleError({ message: `could not draw a QR code for ${text}: longer than ${maxQrBytes} bytes` }))
+  }
   return Effect.succeed(render(qrMatrix(bytes)))
 }

@@ -1,4 +1,4 @@
-import { Console, Effect, FileSystem, Option, Schema } from "effect"
+import { Console, Effect, FileSystem, Option, type PlatformError, Schema } from "effect"
 import { Command, Flag } from "effect/cli"
 import { path, type FileLogOptions } from "./file.ts"
 
@@ -22,14 +22,24 @@ interface Filter {
   readonly grep: Option.Option<string>
 }
 
-// Lines that are not entries, like a line cut by a crash, only pass when no level is asked for.
-const matches = (filter: Filter, line: string, entry: Option.Option<Entry>) => {
-  const atLevel = Option.match(filter.level, {
-    onNone: () => true,
-    onSome: (level) => Option.match(entry, { onNone: () => false, onSome: (entry) => LEVELS.indexOf(entry.level.toLowerCase() as Level) >= LEVELS.indexOf(level) }),
-  })
-  return atLevel && Option.match(filter.grep, { onNone: () => true, onSome: (text) => line.toLowerCase().includes(text.toLowerCase()) })
+const isLevel = Schema.is(Schema.Literals(LEVELS))
+
+// Effect writes levels in capitals, like INFO; an unknown level ranks below every known one.
+const levelRank = (level: string) => {
+  const lower = level.toLowerCase()
+  if (!isLevel(lower)) {
+    return -1
+  }
+  return LEVELS.indexOf(lower)
 }
+
+// Lines that are not entries, like a line cut by a crash, only pass when no level is asked for.
+const isAtLevel = (filter: Filter, entry: Option.Option<Entry>) =>
+  Option.match(filter.level, { onNone: () => true, onSome: (level) => Option.exists(entry, (found) => levelRank(found.level) >= LEVELS.indexOf(level)) })
+
+const containsText = (filter: Filter, line: string) => Option.match(filter.grep, { onNone: () => true, onSome: (text) => line.toLowerCase().includes(text.toLowerCase()) })
+
+const matches = (filter: Filter, line: string, entry: Option.Option<Entry>) => isAtLevel(filter, entry) && containsText(filter, line)
 
 const pad = (value: number, length = 2) => String(value).padStart(length, "0")
 
@@ -93,6 +103,13 @@ const fileSize = (fs: FileSystem.FileSystem, file: string) =>
     Effect.orElseSucceed(() => 0)
   )
 
+type Read = (from: number, to: number) => Effect.Effect<Uint8Array, PlatformError.PlatformError>
+
+const readRange =
+  (handle: FileSystem.File): Read =>
+  (from, to) =>
+    handle.readAlloc(to - from, { position: BigInt(from) }).pipe(Effect.map(Option.getOrElse(() => new Uint8Array())))
+
 // Prints what is appended after byte `offset` every half second, until interrupted; starts over when the file is cleared.
 const follow = Effect.fnUntraced(function* follow(file: string, offset: number, filter: Filter, json: boolean) {
   const fs = yield* FileSystem.FileSystem
@@ -107,8 +124,8 @@ const follow = Effect.fnUntraced(function* follow(file: string, offset: number, 
     if (size === position) {
       continue
     }
-    const bytes = yield* Effect.scoped(fs.open(file, { flag: "r" }).pipe(Effect.flatMap((handle) => handle.readAlloc(size - position, { position: BigInt(position) }))))
-    const chunk = decoder.decode(Option.getOrElse(bytes, () => new Uint8Array()))
+    const from = position
+    const chunk = decoder.decode(yield* Effect.scoped(fs.open(file, { flag: "r" }).pipe(Effect.flatMap((handle) => readRange(handle)(from, size)))))
     // Keeps a line still being written for the next read.
     const complete = chunk.slice(0, chunk.lastIndexOf("\n") + 1)
     position += new TextEncoder().encode(complete).length
@@ -117,6 +134,7 @@ const follow = Effect.fnUntraced(function* follow(file: string, offset: number, 
 })
 
 const CHUNK = 64 * 1024
+const NEWLINE = 10
 
 const concat = (head: Uint8Array, tail: Uint8Array) => {
   const bytes = new Uint8Array(head.length + tail.length)
@@ -125,47 +143,57 @@ const concat = (head: Uint8Array, tail: Uint8Array) => {
   return bytes
 }
 
-// The last `count` matching entries, read backwards in chunks so a large log is never loaded whole, and where they end: a line still being written is left
-// for `follow`.
+// After the last newline before `size`; 0 when no line is complete yet. A line still being written is left for `follow`.
+const endOfLastLine = Effect.fnUntraced(function* endOfLastLine(read: Read, size: number) {
+  for (let to = size; to > 0; to = Math.max(0, to - CHUNK)) {
+    const from = Math.max(0, to - CHUNK)
+    const lastNewline = (yield* read(from, to)).lastIndexOf(NEWLINE)
+    if (lastNewline !== -1) {
+      return from + lastNewline + 1
+    }
+  }
+  return 0
+})
+
+// A chunk's first line may have begun in the chunk before it, unless the chunk starts the file.
+const completeLinesStart = (bytes: Uint8Array, startsFile: boolean) => {
+  if (startsFile) {
+    return 0
+  }
+  const firstNewline = bytes.indexOf(NEWLINE)
+  if (firstNewline === -1) {
+    return bytes.length
+  }
+  return firstNewline + 1
+}
+
+// The last `count` rendered lines before byte `end`, read backwards in chunks so a large log is never loaded whole.
+const lastRendered = Effect.fnUntraced(function* lastRendered(read: Read, end: number, count: number, renderLines: (lines: ReadonlyArray<string>) => ReadonlyArray<string>) {
+  const decoder = new TextDecoder()
+  let start = end
+  let carry: Uint8Array = new Uint8Array()
+  let found: ReadonlyArray<string> = []
+  while (start > 0 && found.length < count) {
+    const from = Math.max(0, start - CHUNK)
+    const bytes = concat(yield* read(from, start), carry)
+    start = from
+    const cut = completeLinesStart(bytes, start === 0)
+    carry = bytes.subarray(0, cut)
+    found = [...renderLines(decoder.decode(bytes.subarray(cut)).split("\n")), ...found].slice(-count)
+  }
+  return found
+})
+
+// The last `count` matching entries, and where the last complete line ends.
 const lastEntries = Effect.fnUntraced(function* lastEntries(file: string, count: number, filter: Filter, json: boolean) {
   const fs = yield* FileSystem.FileSystem
   const size = yield* fileSize(fs, file)
   return yield* Effect.scoped(
     Effect.gen(function* () {
-      const handle = yield* fs.open(file, { flag: "r" })
-      const read = (from: number, to: number) =>
-        handle.readAlloc(to - from, { position: BigInt(from) }).pipe(Effect.map(Option.getOrElse(() => new Uint8Array())))
-      // After the last newline; the start of the file when no line is complete yet.
-      let end = 0
-      for (let to = size; to > 0; to = Math.max(0, to - CHUNK)) {
-        const from = Math.max(0, to - CHUNK)
-        const lastNewline = (yield* read(from, to)).lastIndexOf(10)
-        if (lastNewline !== -1) {
-          end = from + lastNewline + 1
-          break
-        }
-      }
-      let start = end
-      let carry: Uint8Array = new Uint8Array()
-      let found: ReadonlyArray<string> = []
-      while (start > 0 && found.length < count) {
-        const from = Math.max(0, start - CHUNK)
-        const bytes = concat(yield* read(from, start), carry)
-        start = from
-        // The first line of a chunk may have begun in the one before it.
-        const firstNewline = bytes.indexOf(10)
-        if (start > 0 && firstNewline === -1) {
-          carry = bytes
-          continue
-        }
-        let cut = 0
-        if (start > 0) {
-          cut = firstNewline + 1
-        }
-        carry = bytes.subarray(0, cut)
-        found = [...render(new TextDecoder().decode(bytes.subarray(cut)).split("\n"), filter, json), ...found].slice(-count)
-      }
-      return { entries: found, end }
+      const read = readRange(yield* fs.open(file, { flag: "r" }))
+      const end = yield* endOfLastLine(read, size)
+      const entries = yield* lastRendered(read, end, count, (lines) => render(lines, filter, json))
+      return { entries, end }
     })
   )
 })

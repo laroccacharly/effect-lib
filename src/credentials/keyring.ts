@@ -79,21 +79,24 @@ export interface RecoveryOptions {
   readonly retryTimes?: number
 }
 
+// The first backend's answer that does not throw; otherwise throws every failure, in order.
+const firstSucceeding = async <A>(backends: ReadonlyArray<Backend>, run: (backend: Backend) => Promise<A>) => {
+  const failures: string[] = []
+  for (const backend of backends) {
+    try {
+      return await run(backend)
+    } catch (cause) {
+      failures.push(describe(cause))
+    }
+  }
+  throw new Error(failures.join("; then "))
+}
+
 // Tries each backend in order, then retries the whole sequence on the schedule.
 export const fromBackends = (backends: ReadonlyArray<Backend>, options: RecoveryOptions = {}): Keyring => {
   const attempt = <A>(name: string, action: string, run: (backend: Backend) => Promise<A>) =>
     Effect.tryPromise({
-      try: async () => {
-        const failures: string[] = []
-        for (const backend of backends) {
-          try {
-            return await run(backend)
-          } catch (cause) {
-            failures.push(describe(cause))
-          }
-        }
-        throw new Error(failures.join("; then "))
-      },
+      try: async () => await firstSucceeding(backends, run),
       catch: (cause) =>
         new CredentialsError({
           name,

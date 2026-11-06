@@ -4,7 +4,7 @@ import type { ChildProcessSpawner } from "effect/process"
 import type { CredentialsError, Keyring } from "../credentials/keyring.ts"
 import { make as makeCredentials } from "../credentials/make.ts"
 import type { Secret } from "../credentials/secret.ts"
-import { make as makeJsonStore } from "../json-store/index.ts"
+import { make as makeJsonStore } from "../json-store/make.ts"
 import type { JsonStore, JsonStoreError } from "../json-store/store.ts"
 import { CloudflareAccountId, cloudflareApiToken, workerUrl } from "./cloudflare.ts"
 import { waitForHealth } from "./health.ts"
@@ -69,34 +69,53 @@ const cloudflareEnvironment = Effect.fnUntraced(function* cloudflareEnvironment(
 const savedSettings = <S extends Settings>(store: Option.Option<JsonStore<S>>) =>
   Option.match(store, { onNone: () => Effect.succeed({}), onSome: settingsEnvironment })
 
-const tokenOf = <S extends Settings>(options: DeployOptions<S>) => cloudflareApiToken(options.cloudflareApiToken)
+type SettingsStore<S extends Settings> = ReturnType<typeof makeJsonStore<S, S>>
 
-const urlOf = <S extends Settings>(options: DeployOptions<S>): AppUrl => workerUrl(options.url)
-
-// The url first, once, even when the app lists it among its secrets too.
-const appSecrets = <S extends Settings>(options: DeployOptions<S>): ReadonlyArray<AppSecret> => [
-  urlOf(options),
-  ...(options.secrets ?? []).filter((secret) => secret.name !== options.url),
-]
-
-const allSecrets = <S extends Settings>(options: DeployOptions<S>) => [tokenOf(options), CloudflareAccountId, ...appSecrets(options)]
-
-// The build never sees a secret, even one exported in the shell.
-const withoutSecrets = <S extends Settings>(env: Readonly<Record<string, string>>, options: DeployOptions<S>) => {
-  const names = new Set(allSecrets(options).map((secret) => secret.name))
-  return Object.fromEntries(Object.entries(env).filter(([name]) => !names.has(name)))
+// DeployOptions read once: the secrets they name, the settings store, and alchemy's stage arguments.
+interface Plan<S extends Settings> {
+  readonly app: string
+  readonly token: AppToken
+  readonly url: AppUrl
+  // The url first, once, even when the app lists it among its secrets too.
+  readonly appSecrets: ReadonlyArray<AppSecret>
+  readonly secretNames: ReadonlySet<string>
+  readonly store: Option.Option<SettingsStore<S>>
+  readonly stage: ReadonlyArray<string>
+  readonly build: Option.Option<CommandLine>
 }
 
-// Resolved before building, so a missing secret fails at once. The shell's variables win over the saved settings.
-const environments = Effect.fnUntraced(function* environments<S extends Settings>(options: DeployOptions<S>, store: Option.Option<JsonStore<S>>) {
-  const settings = yield* savedSettings(store)
-  const shell = shellEnvironment()
-  const cloudflare = yield* cloudflareEnvironment(tokenOf(options))
-  const secrets = yield* appSecretsEnvironment(appSecrets(options))
-  return { build: withoutSecrets({ ...settings, ...shell }, options), alchemy: { ...settings, ...shell, ...cloudflare, ...secrets } } satisfies Environments
-})
-
 const stageArguments = (stage: Option.Option<string>) => Option.match(stage, { onNone: () => [], onSome: (name) => ["--stage", name] })
+
+const planOf = <S extends Settings>(options: DeployOptions<S>): Plan<S> => {
+  const token = cloudflareApiToken(options.cloudflareApiToken)
+  const url = workerUrl(options.url)
+  const appSecrets = [url, ...(options.secrets ?? []).filter((secret) => secret.name !== options.url)]
+  return {
+    app: options.app,
+    token,
+    url,
+    appSecrets,
+    secretNames: new Set([token.name, CloudflareAccountId.name, ...appSecrets.map((secret) => secret.name)]),
+    store: Option.map(Option.fromUndefinedOr(options.settings), (schema) => makeJsonStore(settingsPath(options.app), schema)),
+    stage: stageArguments(Option.fromUndefinedOr(options.stage)),
+    build: Option.fromUndefinedOr(options.build),
+  }
+}
+
+const allSecrets = <S extends Settings>(plan: Plan<S>) => [plan.token, CloudflareAccountId, ...plan.appSecrets]
+
+// The build never sees a secret, even one exported in the shell.
+const withoutSecrets = (env: Readonly<Record<string, string>>, secretNames: ReadonlySet<string>) =>
+  Object.fromEntries(Object.entries(env).filter(([name]) => !secretNames.has(name)))
+
+// Resolved before building, so a missing secret fails at once. The shell's variables win over the saved settings.
+const environments = Effect.fnUntraced(function* environments<S extends Settings>(plan: Plan<S>) {
+  const settings = yield* savedSettings(plan.store)
+  const shell = shellEnvironment()
+  const cloudflare = yield* cloudflareEnvironment(plan.token)
+  const secrets = yield* appSecretsEnvironment(plan.appSecrets)
+  return { build: withoutSecrets({ ...settings, ...shell }, plan.secretNames), alchemy: { ...settings, ...shell, ...cloudflare, ...secrets } } satisfies Environments
+})
 
 const buildIfWired = (build: Option.Option<CommandLine>, env: Environment) => Option.match(build, { onNone: () => Effect.void, onSome: (command) => runInTerminal(command, env) })
 
@@ -111,57 +130,63 @@ const alchemy = (args: ReadonlyArray<string>, env: Environment) => runInTerminal
 
 type Step = Effect.Effect<void, DeployError | CredentialsError | JsonStoreError, Services>
 
-export const make = <S extends Settings>(options: DeployOptions<S>) => {
-  const store = Option.map(Option.fromUndefinedOr(options.settings), (schema) => makeJsonStore(settingsPath(options.app), schema))
-  const credentials = makeCredentials(allSecrets(options))
-  const stage = stageArguments(Option.fromUndefinedOr(options.stage))
+// Builds, then runs alchemy with the commit as DEPLOY_VERSION, which it returns.
+const buildThenAlchemy = Effect.fnUntraced(function* buildThenAlchemy<S extends Settings>(plan: Plan<S>, args: ReadonlyArray<string>) {
+  const env = yield* environments(plan)
+  const version = yield* commitVersion()
+  yield* buildIfWired(plan.build, env.build)
+  yield* alchemy([...args, ...plan.stage], { ...env.alchemy, DEPLOY_VERSION: version })
+  return version
+})
 
-  // Builds, then runs alchemy with the commit as DEPLOY_VERSION, which it returns.
-  const buildThenAlchemy = Effect.fnUntraced(function* buildThenAlchemy(args: ReadonlyArray<string>) {
-    const env = yield* environments(options, store)
-    const version = yield* commitVersion()
-    yield* buildIfWired(Option.fromUndefinedOr(options.build), env.build)
-    yield* alchemy([...args, ...stage], { ...env.alchemy, DEPLOY_VERSION: version })
-    return version
+// Done once the Worker answers the version just deployed.
+const deploy = <S extends Settings>(plan: Plan<S>, adopting: boolean): Step =>
+  Effect.gen(function* deploy() {
+    const version = yield* buildThenAlchemy(plan, ["deploy", "--yes", ...adoptArguments(adopting)])
+    yield* waitForHealth(Redacted.value(yield* plan.url.resolve), version)
   })
 
-  // Done once the Worker answers the version just deployed.
-  const deploy = (adopting: boolean): Step =>
-    Effect.gen(function* deploy() {
-      const version = yield* buildThenAlchemy(["deploy", "--yes", ...adoptArguments(adopting)])
-      yield* waitForHealth(Redacted.value(yield* urlOf(options).resolve), version)
-    })
+const showPlan = <S extends Settings>(plan: Plan<S>, adopting: boolean): Step => Effect.asVoid(buildThenAlchemy(plan, ["plan", ...adoptArguments(adopting)]))
 
-  // Only the url: checking needs no Cloudflare secret, no build and no alchemy.
-  const check: Step = Effect.gen(function* check() {
+// Only the url: checking needs no Cloudflare secret, no build and no alchemy.
+const check = <S extends Settings>(plan: Plan<S>): Step =>
+  Effect.gen(function* check() {
     const version = yield* commitVersion()
-    const healthUrl = yield* waitForHealth(Redacted.value(yield* urlOf(options).resolve), version)
+    const healthUrl = yield* waitForHealth(Redacted.value(yield* plan.url.resolve), version)
     yield* Console.log(`${healthUrl} answers ${version}`)
   })
 
-  // No --yes: alchemy shows what it would delete and asks first.
-  const destroy: Step = Effect.gen(function* destroy() {
-    const env = yield* environments(options, store)
-    yield* alchemy(["destroy", ...stage], env.alchemy)
+// No --yes: alchemy shows what it would delete and asks first.
+const destroy = <S extends Settings>(plan: Plan<S>): Step =>
+  Effect.gen(function* destroy() {
+    const env = yield* environments(plan)
+    yield* alchemy(["destroy", ...plan.stage], env.alchemy)
   })
 
-  const adopt = Flag.Boolean("adopt").pipe(Flag.withDefault(false), Flag.withDescription("Take over resources that already exist on Cloudflare under the same names"))
+type Credentials = ReturnType<typeof makeCredentials>
 
-  const plan = Command.make("plan", { adopt }, (flags): Step => Effect.asVoid(buildThenAlchemy(["plan", ...adoptArguments(flags.adopt)]))).pipe(
-    Command.withDescription("Build, then show what deploying would change")
-  )
-  const checkCommand = Command.make("check", {}, () => check).pipe(
-    Command.withDescription("Wait for the Worker's /health to answer this checkout's version, as deploy does after deploying")
-  )
-  const destroyCommand = Command.make("destroy", {}, () => destroy).pipe(Command.withDescription("Delete the deployed resources, after alchemy asks"))
-  const config = Option.match(store, { onNone: () => [], onSome: (settings) => [settings.commands("config")] })
+const adoptFlag = Flag.Boolean("adopt").pipe(Flag.withDefault(false), Flag.withDescription("Take over resources that already exist on Cloudflare under the same names"))
 
-  const command = Command.make("deploy", { adopt }, (flags) => deploy(flags.adopt)).pipe(
-    Command.withDescription(`Build ${options.app}, deploy it with alchemy, then wait for its /health to answer the deployed version`),
-    Command.withSubcommands([plan, checkCommand, destroyCommand, ...credentials.commands, ...config])
+const deployCommand = <S extends Settings>(plan: Plan<S>, credentials: Credentials) => {
+  const config = Option.match(plan.store, { onNone: () => [], onSome: (settings) => [settings.commands("config")] })
+  return Command.make("deploy", { adopt: adoptFlag }, (flags) => deploy(plan, flags.adopt)).pipe(
+    Command.withDescription(`Build ${plan.app}, deploy it with alchemy, then wait for its /health to answer the deployed version`),
+    Command.withSubcommands([
+      Command.make("plan", { adopt: adoptFlag }, (flags) => showPlan(plan, flags.adopt)).pipe(Command.withDescription("Build, then show what deploying would change")),
+      Command.make("check", {}, () => check(plan)).pipe(
+        Command.withDescription("Wait for the Worker's /health to answer this checkout's version, as deploy does after deploying")
+      ),
+      Command.make("destroy", {}, () => destroy(plan)).pipe(Command.withDescription("Delete the deployed resources, after alchemy asks")),
+      ...credentials.commands,
+      ...config,
+    ])
   )
+}
 
-  return { command, credentials }
+export const make = <S extends Settings>(options: DeployOptions<S>) => {
+  const plan = planOf(options)
+  const credentials = makeCredentials(allSecrets(plan))
+  return { command: deployCommand(plan, credentials), credentials }
 }
 
 /** Prints a deploy step's failure as one line and exits with 1, rather than a stack trace. */

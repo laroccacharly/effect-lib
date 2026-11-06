@@ -2,7 +2,7 @@
 
 import { Effect, Layer, Option, Schema } from "effect"
 import { HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http"
-import { socketServer } from "../../portless/socket.ts"
+import { socketServer } from "../../shared/socket-server.ts"
 import { CredentialsError } from "../keyring.ts"
 import { VaultAnswer, type VaultOptions, vaultSocket } from "./protocol.ts"
 

@@ -50,7 +50,9 @@ const reedSolomonDivisor = (degree: number): Array<number> => {
   divisor[degree - 1] = 1
   let root = 1
   for (let i = 0; i < degree; i++) {
-    for (let j = 0; j < degree; j++) divisor[j] = gfMultiply(divisor[j]!, root) ^ (divisor[j + 1] ?? 0)
+    for (let j = 0; j < degree; j++) {
+      divisor[j] = gfMultiply(divisor[j]!, root) ^ (divisor[j + 1] ?? 0)
+    }
     root = gfMultiply(root, 2)
   }
   return divisor
@@ -72,7 +74,9 @@ const errorCorrection = (data: ReadonlyArray<number>, degree: number): Array<num
 const dataCodewordsFor = (bytes: Uint8Array, spec: Spec): Array<number> => {
   const nibbles = [0b0100, ...[bytes.length, ...bytes].flatMap((byte) => [byte >>> 4, byte & 0xf]), 0b0000]
   const codewords = Array.from({ length: nibbles.length / 2 }, (_, i) => (nibbles[2 * i]! << 4) | nibbles[2 * i + 1]!)
-  for (let pad = 0xec; codewords.length < spec.dataCodewords; pad ^= 0xec ^ 0x11) codewords.push(pad)
+  for (let pad = 0xec; codewords.length < spec.dataCodewords; pad ^= 0xec ^ 0x11) {
+    codewords.push(pad)
+  }
   return codewords
 }
 
@@ -80,7 +84,9 @@ const dataCodewordsFor = (bytes: Uint8Array, spec: Spec): Array<number> => {
 const formatBits = (level: Level, mask: number): number => {
   const data = (levelBits[level] << 3) | mask
   let remainder = data
-  for (let i = 0; i < 10; i++) remainder = (remainder << 1) ^ ((remainder >>> 9) * 0x537)
+  for (let i = 0; i < 10; i++) {
+    remainder = (remainder << 1) ^ ((remainder >>> 9) * 0x537)
+  }
   return ((data << 10) | (remainder & 0x3ff)) ^ 0x5412
 }
 
@@ -115,7 +121,9 @@ const drawRings = (matrix: Matrix, centerX: number, centerY: number, radius: num
   const isInside = (x: number, y: number) => x >= 0 && x < matrix.size && y >= 0 && y < matrix.size
   const offsets = range(-radius, radius).flatMap((dy) => range(-radius, radius).map((dx) => [dx, dy] as const))
   for (const [dx, dy] of offsets) {
-    if (isInside(centerX + dx, centerY + dy)) matrix.set(centerX + dx, centerY + dy, isDark(Math.max(Math.abs(dx), Math.abs(dy))))
+    if (isInside(centerX + dx, centerY + dy)) {
+      matrix.set(centerX + dx, centerY + dy, isDark(Math.max(Math.abs(dx), Math.abs(dy))))
+    }
   }
 }
 
@@ -130,18 +138,28 @@ const drawFunctionPatterns = (matrix: Matrix, version: number) => {
   drawRings(matrix, 3, 3, 4, isFinderDark)
   drawRings(matrix, size - 4, 3, 4, isFinderDark)
   drawRings(matrix, 3, size - 4, 4, isFinderDark)
-  if (version >= 2) drawRings(matrix, size - 7, size - 7, 2, (distance) => distance !== 1)
+  if (version >= 2) {
+    drawRings(matrix, size - 7, size - 7, 2, (distance) => distance !== 1)
+  }
 }
 
 const drawFormatBits = (matrix: Matrix, bits: number) => {
   const size = matrix.size
-  for (let i = 0; i <= 5; i++) matrix.set(8, i, bitAt(bits, i))
+  for (let i = 0; i <= 5; i++) {
+    matrix.set(8, i, bitAt(bits, i))
+  }
   matrix.set(8, 7, bitAt(bits, 6))
   matrix.set(8, 8, bitAt(bits, 7))
   matrix.set(7, 8, bitAt(bits, 8))
-  for (let i = 9; i < 15; i++) matrix.set(14 - i, 8, bitAt(bits, i))
-  for (let i = 0; i < 8; i++) matrix.set(size - 1 - i, 8, bitAt(bits, i))
-  for (let i = 8; i < 15; i++) matrix.set(8, size - 15 + i, bitAt(bits, i))
+  for (let i = 9; i < 15; i++) {
+    matrix.set(14 - i, 8, bitAt(bits, i))
+  }
+  for (let i = 0; i < 8; i++) {
+    matrix.set(size - 1 - i, 8, bitAt(bits, i))
+  }
+  for (let i = 8; i < 15; i++) {
+    matrix.set(8, size - 15 + i, bitAt(bits, i))
+  }
   matrix.set(8, size - 8, true)
 }
 
@@ -150,7 +168,9 @@ const drawFormatBits = (matrix: Matrix, bits: number) => {
 const zigzag = (size: number) => {
   const columnPairs = range(0, (size - 1) / 2 - 1).map((pair) => size - 1 - 2 * pair - Number(pair >= (size - 7) / 2))
   const pairRows = (pairIndex: number) => {
-    if (pairIndex % 2 === 0) return range(0, size - 1).reverse()
+    if (pairIndex % 2 === 0) {
+      return range(0, size - 1).reverse()
+    }
     return range(0, size - 1)
   }
   return columnPairs.flatMap((right, pairIndex) => pairRows(pairIndex).flatMap((y) => [[right, y] as const, [right - 1, y] as const]))
@@ -185,7 +205,9 @@ const runPenalty = (line: ReadonlyArray<boolean>) => {
       run++
       continue
     }
-    if (run >= 5) penalty += run - 2
+    if (run >= 5) {
+      penalty += run - 2
+    }
     run = 1
   }
   return penalty
