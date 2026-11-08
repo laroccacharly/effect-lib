@@ -81,6 +81,7 @@ export const install: (config: ServiceConfig) => Effect.Effect<void, SystemdServ
   }
   yield* writeUnit(config)
   yield* systemctl(["enable", "--now", unitName(config)])
+  yield* Effect.logInfo(`Installed and started ${unitName(config)}; follow it with \`journalctl --user -u ${config.name} -f\``)
 })
 
 // Rewrites the unit, then enables and restarts it, whether or not it was installed.
@@ -88,24 +89,33 @@ export const reinstall: (config: ServiceConfig) => Effect.Effect<void, SystemdSe
   yield* writeUnit(config)
   yield* systemctl(["enable", unitName(config)])
   yield* systemctl(["restart", unitName(config)])
+  yield* Effect.logInfo(`Rewrote and restarted ${unitName(config)}`)
 })
 
 // Stops, disables and removes the unit; false when it was not installed.
 export const uninstall: (config: ServiceConfig) => Effect.Effect<boolean, SystemdServiceError, Services> = Effect.fn("uninstall")(function* uninstall(config: ServiceConfig) {
   if (!(yield* isInstalled(config))) {
+    yield* Effect.logInfo(`${unitName(config)} is not installed`)
     return false
   }
   const fs = yield* FileSystem.FileSystem
   yield* systemctl(["disable", "--now", unitName(config)])
   yield* fs.remove(unitPath(config)).pipe(Effect.mapError((cause) => new SystemdServiceError({ message: `could not remove ${unitPath(config)}: ${cause.message}` })))
   yield* systemctl(["daemon-reload"])
+  yield* Effect.logInfo(`Stopped and removed ${unitName(config)}`)
   return true
 })
 
-// Prints `systemctl status` with the latest log lines. A non-zero exit only means the service is not running.
-export const status: (config: ServiceConfig, lines?: number) => Effect.Effect<void, SystemdServiceError, ChildProcessSpawner.ChildProcessSpawner> = Effect.fn("status")(function* status(
+// Prints `systemctl status` with the latest log lines; false when it is not installed.
+// A non-zero exit only means the service is not running.
+export const status: (config: ServiceConfig, lines?: number) => Effect.Effect<boolean, SystemdServiceError, Services> = Effect.fn("status")(function* status(
   config: ServiceConfig,
   lines = 20
 ) {
+  if (!(yield* isInstalled(config))) {
+    yield* Effect.logInfo(`${unitName(config)} is not installed`)
+    return false
+  }
   yield* systemctl(["status", "--no-pager", `--lines=${lines}`, unitName(config)], true)
+  return true
 })
