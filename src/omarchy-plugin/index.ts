@@ -1,0 +1,6 @@
+export { pluginCommand } from "./commands.ts"
+export { pluginsDir, type Plugin, type PluginConfig } from "./config.ts"
+export { OmarchyPluginError } from "./error.ts"
+export type { LinkState } from "./link.ts"
+export { install, reinstall, status, uninstall, validate, type InstallResult, type PluginStatus, type Section, type StaleLinkRemoval, type UninstallResult } from "./plugin.ts"
+export type { ShellPlugin } from "./shell.ts"

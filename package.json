@@ -1,6 +1,6 @@
 {
   "name": "effect-lib",
-  "version": "0.37.2",
+  "version": "0.37.3",
   "private": true,
   "type": "module",
   "description": "Small Effect building blocks, one subpath export each",
@@ -14,6 +14,7 @@
     "./deploy": "./src/deploy/index.ts",
     "./json-store": "./src/json-store/index.ts",
     "./logger": "./src/logger/index.ts",
+    "./omarchy-plugin": "./src/omarchy-plugin/index.ts",
     "./openai-image": "./src/openai-image/index.ts",
     "./portless": "./src/portless/index.ts",
     "./pulse": "./src/pulse/index.ts",
