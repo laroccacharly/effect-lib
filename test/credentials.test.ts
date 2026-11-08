@@ -4,6 +4,7 @@ import { ConfigProvider, Effect, Option, Redacted, Schema } from "effect"
 import {
   type Backend,
   bunKeyring,
+  CredentialsError,
   envOnlyLayer,
   exists,
   freshProcess,
@@ -132,6 +133,15 @@ test("login --force without a terminal keeps what is stored", async () => {
   const keyring = memoryKeyring({ TEST_API_KEY: "stored" })
   await run(make([ApiKey]).login({ fromEnv: true, force: true }), {}, keyring)
   expect(await run(keyring.get("TEST_API_KEY"))).toEqual(Option.some("stored"))
+})
+
+test("login keeps a secret the locked vault holds instead of failing", async () => {
+  const locked: Keyring = {
+    get: (name) => Effect.fail(new CredentialsError({ name, reason: "locked", message: `${name} is in the vault, which is locked` })),
+    set: () => Effect.void,
+    remove: () => Effect.succeed(false),
+  }
+  await run(make([ApiKey]).login({ fromEnv: true, force: true }), {}, locked)
 })
 
 test("login refuses an environment value that does not match the schema", async () => {

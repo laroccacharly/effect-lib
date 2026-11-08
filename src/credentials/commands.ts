@@ -62,6 +62,7 @@ const promptAndSave = Effect.fnUntraced(function* (entry: SecretEntry, stored: b
 type LoginAction =
   | { readonly _tag: "StoreFromEnv"; readonly text: string }
   | { readonly _tag: "Keep" }
+  | { readonly _tag: "Locked" }
   | { readonly _tag: "Prompt"; readonly stored: boolean }
   | { readonly _tag: "Skip" }
   | { readonly _tag: "Missing" }
@@ -88,6 +89,8 @@ const runLoginAction = (entry: SecretEntry, action: LoginAction) => {
       return entry.save(action.text).pipe(Effect.andThen(Console.log(`Stored ${entry.name} from the environment`)))
     case "Keep":
       return Console.log(`${entry.name} is already stored`)
+    case "Locked":
+      return Console.log(`${entry.name} is already stored, in the locked vault`)
     case "Prompt":
       return promptAndSave(entry, action.stored)
     case "Skip":
@@ -96,8 +99,18 @@ const runLoginAction = (entry: SecretEntry, action: LoginAction) => {
   }
 }
 
+// A secret the locked vault holds is stored: login keeps it, as the vault refuses writes to it anyway.
+const lookupAction = (entry: SecretEntry, options: LoginOptions, interactive: boolean) =>
+  entry.lookup.pipe(
+    Effect.map((found): LoginAction => loginAction(entry, found, options, interactive)),
+    Effect.catchIf(
+      (error) => error.reason === "locked",
+      (): Effect.Effect<LoginAction> => Effect.succeed({ _tag: "Locked" })
+    )
+  )
+
 const loginEntry = Effect.fnUntraced(function* loginEntry(entry: SecretEntry, options: LoginOptions, interactive: boolean) {
-  const action = loginAction(entry, yield* entry.lookup, options, interactive)
+  const action = yield* lookupAction(entry, options, interactive)
   yield* runLoginAction(entry, action)
   return action
 })
