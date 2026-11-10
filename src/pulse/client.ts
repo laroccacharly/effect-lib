@@ -56,16 +56,23 @@ export interface HeartbeatOptions extends PulseClientOptions {
   readonly interval?: Duration.Input
   // Defaults to this machine's hostname.
   readonly host?: string
+  // Wait between retries of a failed ping, defaults to 30 seconds; covers a network not yet up at boot.
+  readonly retryDelay?: Duration.Input
 }
 
+// Retries of a failed ping before waiting for the next tick.
+const RETRIES = 10
+
 // Pings now and then every `interval` in a background fiber, for as long as the layer is alive.
-// A failed ping is logged and retried on the next tick, so it never takes the app down.
+// A failed ping is logged and retried every `retryDelay`, then on the next tick, so it never takes the app down.
 export const heartbeat = (options: HeartbeatOptions = {}): Layer.Layer<never, never, HttpClient.HttpClient | Keyring> =>
   Layer.effectDiscard(
     Effect.gen(function* () {
       const client = yield* make(options)
       yield* client.ping(options.host).pipe(
-        Effect.catch((error) => Effect.logWarning(`pulse heartbeat failed: ${error.message}`)),
+        Effect.tapError((error) => Effect.logWarning(`pulse heartbeat failed: ${error.message}`)),
+        Effect.retry({ schedule: Schedule.spaced(options.retryDelay ?? Duration.seconds(30)), times: RETRIES }),
+        Effect.ignore,
         Effect.repeat(Schedule.spaced(options.interval ?? Duration.hours(1))),
         Effect.forkScoped
       )

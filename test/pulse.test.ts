@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, expect, test } from "bun:test"
 import { hostname } from "node:os"
-import { ConfigProvider, Effect, Layer } from "effect"
+import { ConfigProvider, type Duration, Effect, Layer } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { layer as keyringLayer, memoryKeyring } from "../src/credentials/index.ts"
 import { heartbeat, layer, PulseClient } from "../src/pulse/index.ts"
@@ -62,10 +62,10 @@ test("a missing API key fails before calling the server", async () => {
   expect(received).toEqual([])
 })
 
-const runHeartbeat = (millis: number) =>
+const runHeartbeat = (millis: number, interval: Duration.Input = 20) =>
   Effect.runPromise(
     Effect.sleep(millis).pipe(
-      Effect.provide(heartbeat({ origin: server.url.origin, host: "box-a", interval: 20 }).pipe(Layer.provide([FetchHttpClient.layer, keyringLayer(memoryKeyring({ PULSE_API_KEY: "test-key" }))]))),
+      Effect.provide(heartbeat({ origin: server.url.origin, host: "box-a", interval, retryDelay: 5 }).pipe(Layer.provide([FetchHttpClient.layer, keyringLayer(memoryKeyring({ PULSE_API_KEY: "test-key" }))]))),
       Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnvRecord({}))
     )
   )
@@ -74,6 +74,14 @@ test("heartbeat pings right away and then on every interval", async () => {
   await runHeartbeat(70)
   expect(received.length).toBeGreaterThanOrEqual(3)
   expect(received.every((request) => request.body.host === "box-a")).toBe(true)
+})
+
+test("heartbeat retries a failed ping before the next interval", async () => {
+  status = 500
+  setTimeout(() => (status = 200), 12)
+  await runHeartbeat(50, 60_000)
+  expect(received.length).toBeGreaterThanOrEqual(2)
+  expect(received.length).toBeLessThan(10)
 })
 
 test("heartbeat keeps pinging after a failed ping and stops with its scope", async () => {
