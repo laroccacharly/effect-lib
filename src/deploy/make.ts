@@ -30,7 +30,7 @@ export interface DeployOptions<S extends Settings> {
   readonly cloudflareApiToken?: string
   /** What deploying needs that isn't secret, like the domain; adds `config get | set | unset | list`. */
   readonly settings?: SettingsSchema<S>
-  /** Runs before `deploy` and `plan`, like `["bun", "run", "build"]`, with the settings in its environment but no secret. */
+  /** Runs before `deploy` and `plan`, like `["bun", "run", "build"]`, with the settings and the non-sensitive secrets, such as the url, in its environment but no sensitive one. */
   readonly build?: CommandLine
   /** alchemy's `--stage`; alchemy's default when omitted. */
   readonly stage?: string
@@ -79,6 +79,8 @@ interface Plan<S extends Settings> {
   // The url first, once, even when the app lists it among its secrets too.
   readonly appSecrets: ReadonlyArray<AppSecret>
   readonly secretNames: ReadonlySet<string>
+  // The secrets marked `sensitive: false`, which the build gets as alchemy does.
+  readonly publicNames: ReadonlySet<string>
   readonly store: Option.Option<SettingsStore<S>>
   readonly stage: ReadonlyArray<string>
   readonly build: Option.Option<CommandLine>
@@ -96,6 +98,7 @@ const planOf = <S extends Settings>(options: DeployOptions<S>): Plan<S> => {
     url,
     appSecrets,
     secretNames: new Set([token.name, CloudflareAccountId.name, ...appSecrets.map((secret) => secret.name)]),
+    publicNames: new Set([token, CloudflareAccountId, ...appSecrets].filter((secret) => !secret.sensitive).map((secret) => secret.name)),
     store: Option.map(Option.fromUndefinedOr(options.settings), (schema) => makeJsonStore(settingsPath(options.app), schema)),
     stage: stageArguments(Option.fromUndefinedOr(options.stage)),
     build: Option.fromUndefinedOr(options.build),
@@ -104,9 +107,17 @@ const planOf = <S extends Settings>(options: DeployOptions<S>): Plan<S> => {
 
 const allSecrets = <S extends Settings>(plan: Plan<S>) => [plan.token, CloudflareAccountId, ...plan.appSecrets]
 
-// The build never sees a secret, even one exported in the shell.
 const withoutSecrets = (env: Readonly<Record<string, string>>, secretNames: ReadonlySet<string>) =>
   Object.fromEntries(Object.entries(env).filter(([name]) => !secretNames.has(name)))
+
+const onlyNamed = (env: Environment, names: ReadonlySet<string>) => Object.fromEntries(Object.entries(env).filter(([name]) => names.has(name)))
+
+// The build never sees a sensitive secret, even one exported in the shell, and sees the non-sensitive ones with the
+// values alchemy gets, so both agree on, say, the url.
+const buildEnvironment = <S extends Settings>(plan: Plan<S>, env: Readonly<Record<string, string>>, resolved: Environment) => ({
+  ...withoutSecrets(env, plan.secretNames),
+  ...onlyNamed(resolved, plan.publicNames),
+})
 
 // Resolved before building, so a missing secret fails at once. The shell's variables win over the saved settings.
 const environments = Effect.fnUntraced(function* environments<S extends Settings>(plan: Plan<S>) {
@@ -114,7 +125,8 @@ const environments = Effect.fnUntraced(function* environments<S extends Settings
   const shell = shellEnvironment()
   const cloudflare = yield* cloudflareEnvironment(plan.token)
   const secrets = yield* appSecretsEnvironment(plan.appSecrets)
-  return { build: withoutSecrets({ ...settings, ...shell }, plan.secretNames), alchemy: { ...settings, ...shell, ...cloudflare, ...secrets } } satisfies Environments
+  const resolved = { ...cloudflare, ...secrets }
+  return { build: buildEnvironment(plan, { ...settings, ...shell }, resolved), alchemy: { ...settings, ...shell, ...resolved } } satisfies Environments
 })
 
 const buildIfWired = (build: Option.Option<CommandLine>, env: Environment) => Option.match(build, { onNone: () => Effect.void, onSome: (command) => runInTerminal(command, env) })

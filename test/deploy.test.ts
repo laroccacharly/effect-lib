@@ -97,6 +97,8 @@ test("builds with the settings but no secret, then deploys with the keyring's to
   expect(built["PUBLIC_URL"]).toBe("https://demo.example.com")
   expect(built["CLOUDFLARE_API_TOKEN"]).toBeUndefined()
   expect(built["EMAIL_AUTH_SECRET"]).toBeUndefined()
+  expect(built["DEMO_URL"]).toBe(worker.url.origin)
+  expect(built["CLOUDFLARE_ACCOUNT_ID"]).toBe("account")
 
   expect(await alchemyArgs()).toEqual(["deploy", "--yes", "--stage", "prod"])
   const deployed = await readEnvFile("alchemy-env")
@@ -173,7 +175,7 @@ test("an app can deploy with another token, such as CLOUDFLARE_API_TOKEN", async
   expect((await readEnvFile("alchemy-env"))["CLOUDFLARE_API_TOKEN"]).toBe("app-token")
 })
 
-test("the build never sees a secret, even one exported in the shell", async () => {
+test("the build never sees a sensitive secret, even one exported in the shell", async () => {
   process.env["EMAIL_AUTH_SECRET"] = "shell-secret"
   process.env["WORKER_CLOUDFLARE_API_TOKEN"] = "shell-worker-token"
   await runDeploy({ app: "demo", url: "DEMO_URL", secrets: [EmailAuthSecret], build: recordBuildEnv }, [], { EMAIL_AUTH_SECRET: "shell-secret" })
