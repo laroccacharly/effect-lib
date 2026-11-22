@@ -32,6 +32,8 @@ Deploy.run(
     credentials: [...Deploy.Cloudflare.deployCredentials(), { secret: EmailAuthSecret }, { secret: CmailApiKey }],
     // Saved in ~/.config/bench/deploy.json; a variable of the same name in the shell wins over it.
     settings: Schema.Struct({ EMAIL_FROM: Schema.optionalKey(Schema.String) }),
+    // Optional: checks that must pass before plan and deploy, in order.
+    preflight: [["bun", "run", "lint"], ["bun", "test"]],
     // Optional: omit it when the Worker has nothing to build.
     build: ["bun", "run", "build"],
   },

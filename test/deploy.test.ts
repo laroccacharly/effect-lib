@@ -223,6 +223,32 @@ test("a missing secret fails before building", async () => {
   expect(await exists("alchemy-args")).toBe(false)
 })
 
+const recordPreflightEnv = ["sh", "-c", 'env > "$0"', "preflight-env"] as const
+
+test("preflight checks run first, without secrets, then build and deploy", async () => {
+  await runDeploy({ app: "demo", credentials: workerCredentials(EmailAuthSecret), verification: workerHealth, preflight: [recordPreflightEnv, ["true"]], build: recordBuildEnv }, [], {
+    EMAIL_AUTH_SECRET: "shell-secret",
+  })
+  const checked = await readEnvFile("preflight-env")
+  expect(checked["EMAIL_AUTH_SECRET"]).toBeUndefined()
+  expect(checked["WORKER_CLOUDFLARE_API_TOKEN"]).toBeUndefined()
+  expect(await exists("build-env")).toBe(true)
+  expect(await alchemyArgs()).toEqual(["deploy", "--yes"])
+})
+
+test("a failing preflight check stops the deploy before the secrets, the build and alchemy", async () => {
+  const error = await runDeploy(
+    { app: "demo", credentials: workerCredentials(EmailAuthSecret), verification: workerHealth, preflight: [["false"], recordPreflightEnv], build: recordBuildEnv },
+    ["plan"],
+    {},
+    {}
+  ).catch((failure: Error) => failure)
+  expect(String(error)).toContain("false exited with 1")
+  expect(await exists("preflight-env")).toBe(false)
+  expect(await exists("build-env")).toBe(false)
+  expect(await exists("alchemy-args")).toBe(false)
+})
+
 test("plan --adopt runs alchemy plan with the version, with no build when none is wired, and never asks /health", async () => {
   await runDeploy({ app: "demo", credentials: workerCredentials(), verification: workerHealth }, ["plan", "--adopt"])
   expect(await alchemyArgs()).toEqual(["plan", "--adopt"])

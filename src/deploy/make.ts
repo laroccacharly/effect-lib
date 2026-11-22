@@ -35,6 +35,8 @@ export interface DeployOptions<S extends Settings> {
   readonly settings?: SettingsSchema<S>
   /** Runs before `deploy` and `plan`, like `["bun", "run", "build"]`, with the settings and the non-sensitive secrets, such as the url, in its environment but no sensitive one. */
   readonly build?: CommandLine
+  /** Checks run in order before `deploy` and `plan`, like `[["bun", "run", "lint"], ["bun", "test"]]`; the first that exits non-zero stops the deploy. They run before secrets are resolved, in the build's environment without them. */
+  readonly preflight?: ReadonlyArray<CommandLine>
   /** alchemy's `--stage`; alchemy's default when omitted. */
   readonly stage?: string
 }
@@ -80,6 +82,7 @@ interface Plan<S extends Settings> {
   readonly store: Option.Option<SettingsStore<S>>
   readonly stage: ReadonlyArray<string>
   readonly build: Option.Option<CommandLine>
+  readonly preflight: ReadonlyArray<CommandLine>
 }
 
 const stageArguments = (stage: Option.Option<string>) => Option.match(stage, { onNone: () => [], onSome: (name) => ["--stage", name] })
@@ -97,6 +100,7 @@ const planOf = <S extends Settings>(options: DeployOptions<S>): Plan<S> => {
     store: Option.map(Option.fromUndefinedOr(options.settings), (schema) => makeJsonStore(settingsPath(options.app), schema)),
     stage: stageArguments(Option.fromUndefinedOr(options.stage)),
     build: Option.fromUndefinedOr(options.build),
+    preflight: options.preflight ?? [],
   }
 }
 
@@ -122,6 +126,10 @@ const environments = Effect.fnUntraced(function* environments<S extends Settings
 
 const buildIfWired = (build: Option.Option<CommandLine>, env: Environment) => Option.match(build, { onNone: () => Effect.void, onSome: (command) => runInTerminal(command, env) })
 
+// The build's environment before any secret is resolved: checks like lint and tests need none.
+const runPreflight = <S extends Settings>(plan: Plan<S>) =>
+  Effect.forEach(plan.preflight, (command) => runInTerminal(command, buildEnvironment(plan, shellEnvironment(), {})), { discard: true })
+
 const adoptArguments = (adopting: boolean) => {
   if (adopting) {
     return ["--adopt"]
@@ -133,8 +141,10 @@ const alchemy = (args: ReadonlyArray<string>, env: Environment) => runInTerminal
 
 type Step = Effect.Effect<void, DeployError | CredentialsError | JsonStoreError, Services>
 
-// Builds, then runs alchemy with the commit as DEPLOY_VERSION, which it returns.
+// Runs the preflight checks first, so a failing one stops before the vault is unlocked or anything is built.
+// Then builds and runs alchemy with the commit as DEPLOY_VERSION, which it returns.
 const buildThenAlchemy = Effect.fnUntraced(function* buildThenAlchemy<S extends Settings>(plan: Plan<S>, args: ReadonlyArray<string>) {
+  yield* runPreflight(plan)
   const env = yield* environments(plan)
   const version = yield* commitVersion()
   yield* buildIfWired(plan.build, env.build)
