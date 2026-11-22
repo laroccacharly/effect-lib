@@ -214,6 +214,24 @@ test("destroy leaves alchemy to ask before deleting", async () => {
   expect(healthChecks).toBe(0)
 })
 
+test("an app off Cloudflare, without a url, deploys with its own secrets only and waits for no /health", async () => {
+  const ProjectId = secret("PROJECT_ID", { sensitive: false })
+  const options = { app: "demo", cloudflare: false, secrets: [ProjectId, EmailAuthSecret], build: recordBuildEnv }
+  served = Option.none()
+  await runDeploy(options, [], { EMAIL_AUTH_SECRET: "signing-secret" }, { PROJECT_ID: "project" })
+
+  const built = await readEnvFile("build-env")
+  expect(built["PROJECT_ID"]).toBe("project")
+  expect(built["EMAIL_AUTH_SECRET"]).toBeUndefined()
+  const deployed = await readEnvFile("alchemy-env")
+  expect(deployed["PROJECT_ID"]).toBe("project")
+  expect(deployed["EMAIL_AUTH_SECRET"]).toBe("signing-secret")
+  expect(deployed["CLOUDFLARE_API_TOKEN"]).toBeUndefined()
+  expect(deployed["CLOUDFLARE_ACCOUNT_ID"]).toBeUndefined()
+  expect(deployed["DEPLOY_VERSION"]).toBe(await projectVersion())
+  expect(healthChecks).toBe(0)
+})
+
 test("alchemy exiting with an error fails the deploy", async () => {
   process.env["FAKE_ALCHEMY_EXIT"] = "3"
   const error = await runDeploy({ app: "demo", url: "DEMO_URL" }, []).catch((failure: Error) => failure)
