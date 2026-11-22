@@ -27,6 +27,6 @@ export const runInTerminal: (commandLine: CommandLine, env: Environment) => Effe
 export const definedVariables = (record: Partial<Readonly<Record<string, string>>>): ReadonlyArray<readonly [string, string]> =>
   Object.entries(record).flatMap(([name, value]) => Option.toArray(Option.map(Option.fromUndefinedOr(value), (text) => [name, text] as const)))
 
-/** This process's environment without its CLOUDFLARE_ variables, which the keyring's values replace. */
+/** Alchemy must not discover ambient Cloudflare credentials ahead of explicitly bound ones. */
 export const shellEnvironment = (): Readonly<Record<string, string>> =>
   Object.fromEntries(definedVariables(process.env).filter(([name]) => !name.startsWith("CLOUDFLARE_")))

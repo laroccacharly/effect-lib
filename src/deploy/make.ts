@@ -6,30 +6,31 @@ import { make as makeCredentials } from "../credentials/make.ts"
 import type { Secret } from "../credentials/secret.ts"
 import { make as makeJsonStore } from "../json-store/make.ts"
 import type { JsonStore, JsonStoreError } from "../json-store/store.ts"
-import { CloudflareAccountId, cloudflareApiToken, workerUrl } from "./cloudflare.ts"
-import { waitForHealth } from "./health.ts"
 import { type CommandLine, type DeployError, type Environment, runInTerminal, shellEnvironment } from "./process.ts"
 import { type Settings, type SettingsSchema, settingsEnvironment, settingsPath } from "./settings.ts"
 import { commitVersion } from "./version.ts"
 
-/** A secret the Worker needs, handed to alchemy as the environment variable of the same name. */
+/** A credential managed by the deploy CLI. */
 export type AppSecret = Secret<string, string, boolean>
 
-type AppToken = ReturnType<typeof cloudflareApiToken>
+export interface CredentialBinding {
+  readonly secret: AppSecret
+  /** Environment variable Alchemy receives; defaults to the credential's name. */
+  readonly env?: string
+}
 
-type AppUrl = ReturnType<typeof workerUrl>
+export interface Verification {
+  readonly credentials?: ReadonlyArray<CredentialBinding>
+  readonly wait: (input: { readonly version: string }) => Effect.Effect<void, DeployError | CredentialsError, Keyring>
+}
 
 export interface DeployOptions<S extends Settings> {
   /** The app's name, for ~/.config/<app>/deploy.json. */
   readonly app: string
-  /** The name of the Worker's URL, like `PROXY_URL`, read from the environment, then the keyring: an https origin, handed to alchemy like the secrets. `deploy` and `check` wait for its /health to answer the version. When omitted, as for an app whose address is an output of the stack, `deploy` waits for no /health and there is no `check`: the stack waits for its app itself. */
-  readonly url?: string
-  /** The Worker's secrets, beyond the Cloudflare ones every app shares. */
-  readonly secrets?: ReadonlyArray<AppSecret>
-  /** The name of the token alchemy gets as CLOUDFLARE_API_TOKEN, read from the environment, then the keyring; WORKER_CLOUDFLARE_API_TOKEN when omitted. */
-  readonly cloudflareApiToken?: string
-  /** False for an app deployed somewhere other than Cloudflare: alchemy gets no CLOUDFLARE_API_TOKEN or CLOUDFLARE_ACCOUNT_ID, and none is asked for. True when omitted. */
-  readonly cloudflare?: boolean
+  /** Use an empty list when Alchemy needs no credentials. */
+  readonly credentials: ReadonlyArray<CredentialBinding>
+  /** Runs after a successful deploy and enables the standalone check command. */
+  readonly verification?: Verification
   /** What deploying needs that isn't secret, like the domain; adds `config get | set | unset | list`. */
   readonly settings?: SettingsSchema<S>
   /** Runs before `deploy` and `plan`, like `["bun", "run", "build"]`, with the settings and the non-sensitive secrets, such as the url, in its environment but no sensitive one. */
@@ -53,23 +54,15 @@ const asOption = <A>(resolved: A | Option.Option<A>): Option.Option<A> => {
   return Option.some(resolved)
 }
 
-const resolveSecret = Effect.fnUntraced(function* resolveSecret(secret: AppSecret) {
-  const resolved = yield* secret.resolve
-  return Option.map(asOption(resolved), (text): readonly [string, Redacted.Redacted<string>] => [secret.name, text])
+const envName = ({ secret, env }: CredentialBinding) => env ?? secret.name
+
+const resolveBinding = Effect.fnUntraced(function* resolveBinding(binding: CredentialBinding) {
+  const resolved = yield* binding.secret.resolve
+  return Option.map(asOption(resolved), (text): readonly [string, Redacted.Redacted<string>] => [envName(binding), text])
 })
 
-const appSecretsEnvironment = (secrets: ReadonlyArray<AppSecret>) =>
-  Effect.forEach(secrets, resolveSecret).pipe(Effect.map((entries) => Object.fromEntries(entries.flatMap(Option.toArray))))
-
-const cloudflareEnvironment = Effect.fnUntraced(function* cloudflareEnvironment(token: Option.Option<AppToken>): Effect.fn.Return<Environment, CredentialsError, Keyring> {
-  if (Option.isNone(token)) {
-    return {}
-  }
-  return {
-    CLOUDFLARE_API_TOKEN: yield* token.value.resolve,
-    CLOUDFLARE_ACCOUNT_ID: Redacted.value(yield* CloudflareAccountId.resolve),
-  }
-})
+const credentialsEnvironment = (bindings: ReadonlyArray<CredentialBinding>) =>
+  Effect.forEach(bindings, resolveBinding).pipe(Effect.map((entries) => Object.fromEntries(entries.flatMap(Option.toArray))))
 
 const savedSettings = <S extends Settings>(store: Option.Option<JsonStore<S>>) =>
   Option.match(store, { onNone: () => Effect.succeed({}), onSome: settingsEnvironment })
@@ -79,13 +72,10 @@ type SettingsStore<S extends Settings> = ReturnType<typeof makeJsonStore<S, S>>
 // DeployOptions read once: the secrets they name, the settings store, and alchemy's stage arguments.
 interface Plan<S extends Settings> {
   readonly app: string
-  // None when the app does not deploy to Cloudflare.
-  readonly token: Option.Option<AppToken>
-  readonly url: Option.Option<AppUrl>
-  // The url first, once, even when the app lists it among its secrets too.
-  readonly appSecrets: ReadonlyArray<AppSecret>
-  readonly secretNames: ReadonlySet<string>
-  // The secrets marked `sensitive: false`, which the build gets as alchemy does.
+  readonly bindings: ReadonlyArray<CredentialBinding>
+  readonly verification: Option.Option<Verification>
+  readonly boundNames: ReadonlySet<string>
+  readonly sensitiveNames: ReadonlySet<string>
   readonly publicNames: ReadonlySet<string>
   readonly store: Option.Option<SettingsStore<S>>
   readonly stage: ReadonlyArray<string>
@@ -94,34 +84,21 @@ interface Plan<S extends Settings> {
 
 const stageArguments = (stage: Option.Option<string>) => Option.match(stage, { onNone: () => [], onSome: (name) => ["--stage", name] })
 
-const cloudflareTokenOf = <S extends Settings>(options: DeployOptions<S>) => {
-  if (options.cloudflare === false) {
-    return Option.none<AppToken>()
-  }
-  return Option.some(cloudflareApiToken(options.cloudflareApiToken))
-}
-
-const cloudflareSecrets = (token: Option.Option<AppToken>): ReadonlyArray<AppSecret> => Option.match(token, { onNone: () => [], onSome: (value) => [value, CloudflareAccountId] })
-
 const planOf = <S extends Settings>(options: DeployOptions<S>): Plan<S> => {
-  const token = cloudflareTokenOf(options)
-  const url = Option.map(Option.fromUndefinedOr(options.url), workerUrl)
-  const appSecrets = [...Option.toArray(url), ...(options.secrets ?? []).filter((secret) => secret.name !== options.url)]
-  const every = [...cloudflareSecrets(token), ...appSecrets]
+  const bindings = [...options.credentials, ...(options.verification?.credentials ?? [])]
+  const sensitiveNames = new Set(bindings.filter(({ secret }) => secret.sensitive).flatMap((binding) => [binding.secret.name, envName(binding)]))
   return {
     app: options.app,
-    token,
-    url,
-    appSecrets,
-    secretNames: new Set(every.map((secret) => secret.name)),
-    publicNames: new Set(every.filter((secret) => !secret.sensitive).map((secret) => secret.name)),
+    bindings,
+    verification: Option.fromUndefinedOr(options.verification),
+    boundNames: new Set(bindings.map(envName)),
+    sensitiveNames,
+    publicNames: new Set(bindings.map(envName).filter((name) => !sensitiveNames.has(name))),
     store: Option.map(Option.fromUndefinedOr(options.settings), (schema) => makeJsonStore(settingsPath(options.app), schema)),
     stage: stageArguments(Option.fromUndefinedOr(options.stage)),
     build: Option.fromUndefinedOr(options.build),
   }
 }
-
-const allSecrets = <S extends Settings>(plan: Plan<S>) => [...cloudflareSecrets(plan.token), ...plan.appSecrets]
 
 const withoutSecrets = (env: Readonly<Record<string, string>>, secretNames: ReadonlySet<string>) =>
   Object.fromEntries(Object.entries(env).filter(([name]) => !secretNames.has(name)))
@@ -131,7 +108,7 @@ const onlyNamed = (env: Environment, names: ReadonlySet<string>) => Object.fromE
 // The build never sees a sensitive secret, even one exported in the shell, and sees the non-sensitive ones with the
 // values alchemy gets, so both agree on, say, the url.
 const buildEnvironment = <S extends Settings>(plan: Plan<S>, env: Readonly<Record<string, string>>, resolved: Environment) => ({
-  ...withoutSecrets(env, plan.secretNames),
+  ...withoutSecrets(withoutSecrets(env, plan.boundNames), plan.sensitiveNames),
   ...onlyNamed(resolved, plan.publicNames),
 })
 
@@ -139,10 +116,8 @@ const buildEnvironment = <S extends Settings>(plan: Plan<S>, env: Readonly<Recor
 const environments = Effect.fnUntraced(function* environments<S extends Settings>(plan: Plan<S>) {
   const settings = yield* savedSettings(plan.store)
   const shell = shellEnvironment()
-  const cloudflare = yield* cloudflareEnvironment(plan.token)
-  const secrets = yield* appSecretsEnvironment(plan.appSecrets)
-  const resolved = { ...cloudflare, ...secrets }
-  return { build: buildEnvironment(plan, { ...settings, ...shell }, resolved), alchemy: { ...settings, ...shell, ...resolved } } satisfies Environments
+  const resolved = yield* credentialsEnvironment(plan.bindings)
+  return { build: buildEnvironment(plan, { ...settings, ...shell }, resolved), alchemy: { ...withoutSecrets({ ...settings, ...shell }, plan.boundNames), ...resolved } } satisfies Environments
 })
 
 const buildIfWired = (build: Option.Option<CommandLine>, env: Environment) => Option.match(build, { onNone: () => Effect.void, onSome: (command) => runInTerminal(command, env) })
@@ -167,25 +142,15 @@ const buildThenAlchemy = Effect.fnUntraced(function* buildThenAlchemy<S extends 
   return version
 })
 
-// Done once the Worker answers the version just deployed; without a url, once alchemy is.
 const deploy = <S extends Settings>(plan: Plan<S>, adopting: boolean): Step =>
   Effect.gen(function* deploy() {
     const version = yield* buildThenAlchemy(plan, ["deploy", "--yes", ...adoptArguments(adopting)])
-    if (Option.isNone(plan.url)) {
-      return
-    }
-    yield* waitForHealth(Redacted.value(yield* plan.url.value.resolve), version)
+    yield* Option.match(plan.verification, { onNone: () => Effect.void, onSome: ({ wait }) => wait({ version }) })
   })
 
 const showPlan = <S extends Settings>(plan: Plan<S>, adopting: boolean): Step => Effect.asVoid(buildThenAlchemy(plan, ["plan", ...adoptArguments(adopting)]))
 
-// Only the url: checking needs no Cloudflare secret, no build and no alchemy.
-const check = (url: AppUrl): Step =>
-  Effect.gen(function* check() {
-    const version = yield* commitVersion()
-    const healthUrl = yield* waitForHealth(Redacted.value(yield* url.resolve), version)
-    yield* Console.log(`${healthUrl} answers ${version}`)
-  })
+const check = ({ wait }: Verification): Step => commitVersion().pipe(Effect.flatMap((version) => wait({ version })))
 
 // No --yes: alchemy shows what it would delete and asks first.
 const destroy = <S extends Settings>(plan: Plan<S>): Step =>
@@ -197,17 +162,18 @@ const destroy = <S extends Settings>(plan: Plan<S>): Step =>
 type Credentials = ReturnType<typeof makeCredentials>
 
 const deployDescription = <S extends Settings>(plan: Plan<S>) => {
-  if (Option.isNone(plan.url)) {
-    return `Build ${plan.app}, then deploy it with alchemy`
+  const description = `Build ${plan.app}, then deploy it with alchemy`
+  if (Option.isNone(plan.verification)) {
+    return description
   }
-  return `Build ${plan.app}, deploy it with alchemy, then wait for its /health to answer the deployed version`
+  return `${description} and verify readiness`
 }
 
-const checkCommands = (url: Option.Option<AppUrl>) =>
-  Option.match(url, {
+const checkCommands = (verification: Option.Option<Verification>) =>
+  Option.match(verification, {
     onNone: () => [],
     onSome: (value) => [
-      Command.make("check", {}, () => check(value)).pipe(Command.withDescription("Wait for the Worker's /health to answer this checkout's version, as deploy does after deploying")),
+      Command.make("check", {}, () => check(value)).pipe(Command.withDescription("Verify that the deployed app is ready for this checkout's version")),
     ],
   })
 
@@ -219,7 +185,7 @@ const deployCommand = <S extends Settings>(plan: Plan<S>, credentials: Credentia
     Command.withDescription(deployDescription(plan)),
     Command.withSubcommands([
       Command.make("plan", { adopt: adoptFlag }, (flags) => showPlan(plan, flags.adopt)).pipe(Command.withDescription("Build, then show what deploying would change")),
-      ...checkCommands(plan.url),
+      ...checkCommands(plan.verification),
       Command.make("destroy", {}, () => destroy(plan)).pipe(Command.withDescription("Delete the deployed resources, after alchemy asks")),
       ...credentials.commands,
       ...config,
@@ -227,9 +193,40 @@ const deployCommand = <S extends Settings>(plan: Plan<S>, credentials: Credentia
   )
 }
 
+const validateOptions = (options: object) => {
+  const removed = ["url", "secrets", "cloudflare", "cloudflareApiToken"].filter((name) => Object.hasOwn(options, name))
+  if (removed.length > 0) {
+    throw new TypeError(`Removed deploy options: ${removed.join(", ")}. Use credentials and verification instead. For Workers, use Deploy.Cloudflare.deployCredentials() and Deploy.Cloudflare.workerHealth(urlName).`)
+  }
+  if (!("credentials" in options) || !Array.isArray(options.credentials)) {
+    throw new TypeError("Declare deploy credentials explicitly: use credentials: [] for none or Deploy.Cloudflare.deployCredentials() for Workers.")
+  }
+}
+
+const declaredSecrets = (bindings: ReadonlyArray<CredentialBinding>): ReadonlyArray<AppSecret> => {
+  const sources = new Map<string, AppSecret>()
+  const destinations = new Map<string, AppSecret>()
+  for (const binding of bindings) {
+    const { secret } = binding
+    const name = envName(binding)
+    const source = sources.get(secret.name)
+    const destination = destinations.get(name)
+    if (source !== undefined && source !== secret) {
+      throw new TypeError(`Conflicting definitions for deploy credential ${secret.name}. Reuse the same credential declaration.`)
+    }
+    if (destination !== undefined && destination !== secret) {
+      throw new TypeError(`Multiple deploy credentials target environment variable ${name}.`)
+    }
+    sources.set(secret.name, secret)
+    destinations.set(name, secret)
+  }
+  return [...sources.values()]
+}
+
 export const make = <S extends Settings>(options: DeployOptions<S>) => {
+  validateOptions(options)
   const plan = planOf(options)
-  const credentials = makeCredentials(allSecrets(plan))
+  const credentials = makeCredentials(declaredSecrets(plan.bindings))
   return { command: deployCommand(plan, credentials), credentials }
 }
 

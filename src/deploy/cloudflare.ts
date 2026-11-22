@@ -1,5 +1,7 @@
-import { Schema } from "effect"
+import { Console, Effect, Redacted, Schema } from "effect"
 import { secret } from "../credentials/secret.ts"
+import { waitForHealth } from "./health.ts"
+import type { CredentialBinding, Verification } from "./make.ts"
 
 // What every app needs to deploy its Worker. Apps declare the same names, so one `bun run deploy login` serves them all.
 
@@ -20,3 +22,21 @@ export const workerUrl = (name: string) => secret(name, { label: "Worker URL", s
 
 /** The account the Worker deploys into. */
 export const CloudflareAccountId = secret("CLOUDFLARE_ACCOUNT_ID", { label: "Cloudflare account id", sensitive: false })
+
+export const deployCredentials = (tokenName?: string): ReadonlyArray<CredentialBinding> => [
+  { secret: cloudflareApiToken(tokenName), env: "CLOUDFLARE_API_TOKEN" },
+  { secret: CloudflareAccountId },
+]
+
+export const workerHealth = (urlName: string): Verification => {
+  const url = workerUrl(urlName)
+  return {
+    credentials: [{ secret: url }],
+    wait: ({ version }) =>
+      Effect.gen(function* () {
+        const origin = Redacted.value(yield* url.resolve)
+        const healthUrl = yield* waitForHealth(origin, version)
+        yield* Console.log(`${healthUrl} answers ${version}`)
+      }),
+  }
+}
