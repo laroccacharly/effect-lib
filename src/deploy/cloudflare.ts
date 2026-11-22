@@ -1,12 +1,12 @@
 import { Console, Effect, Redacted, Schema } from "effect"
 import { secret } from "../credentials/secret.ts"
 import { waitForHealth } from "./health.ts"
-import type { CredentialBinding, Verification } from "./make.ts"
+import type { AppSecret, Verification } from "./make.ts"
 
 // What every app needs to deploy its Worker. Apps declare the same names, so one `bun run deploy login` serves them all.
 
-/** The token alchemy deploys with, read from `name`: by default an account token with Workers Scripts Write, D1 Write, and Zone Read, DNS Write and Workers Routes Write on the app's zone. */
-export const cloudflareApiToken = (name = "WORKER_CLOUDFLARE_API_TOKEN") => secret(name, { label: "Cloudflare token that deploys Workers" })
+/** The token alchemy deploys with, read from `name` and passed as CLOUDFLARE_API_TOKEN, which effect-lib strips from the shell so a broader token is never used by accident: by default an account token with Workers Scripts Write, D1 Write, and Zone Read, DNS Write and Workers Routes Write on the app's zone. */
+export const cloudflareApiToken = (name = "WORKER_CLOUDFLARE_API_TOKEN") => secret(name, { label: "Cloudflare token that deploys Workers", exportAs: "CLOUDFLARE_API_TOKEN" })
 
 export const WorkerCloudflareApiToken = cloudflareApiToken()
 
@@ -23,15 +23,12 @@ export const workerUrl = (name: string) => secret(name, { label: "Worker URL", s
 /** The account the Worker deploys into. */
 export const CloudflareAccountId = secret("CLOUDFLARE_ACCOUNT_ID", { label: "Cloudflare account id", sensitive: false })
 
-export const deployCredentials = (tokenName?: string): ReadonlyArray<CredentialBinding> => [
-  { secret: cloudflareApiToken(tokenName), env: "CLOUDFLARE_API_TOKEN" },
-  { secret: CloudflareAccountId },
-]
+export const deploySecrets = (tokenName?: string): ReadonlyArray<AppSecret> => [cloudflareApiToken(tokenName), CloudflareAccountId]
 
 export const workerHealth = (urlName: string): Verification => {
   const url = workerUrl(urlName)
   return {
-    credentials: [{ secret: url }],
+    secrets: [url],
     wait: ({ version }) =>
       Effect.gen(function* () {
         const origin = Redacted.value(yield* url.resolve)

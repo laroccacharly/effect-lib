@@ -29,7 +29,7 @@ Deploy.run(
     app: "bench",
     // Where the Worker is reached, read like the token: the environment, then the keyring. The CLI may declare it too.
     verification: Deploy.Cloudflare.workerHealth("BENCH_URL"),
-    credentials: [...Deploy.Cloudflare.deployCredentials(), { secret: EmailAuthSecret }, { secret: CmailApiKey }],
+    secrets: [...Deploy.Cloudflare.deploySecrets(), EmailAuthSecret, CmailApiKey],
     // Saved in ~/.config/bench/deploy.json; a variable of the same name in the shell wins over it.
     settings: Schema.Struct({ EMAIL_FROM: Schema.optionalKey(Schema.String) }),
     // Optional: checks that must pass before plan and deploy, in order.

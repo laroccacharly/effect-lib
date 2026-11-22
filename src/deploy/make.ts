@@ -13,22 +13,16 @@ import { commitVersion } from "./version.ts"
 /** A credential managed by the deploy CLI. */
 export type AppSecret = Secret<string, string, boolean>
 
-export interface CredentialBinding {
-  readonly secret: AppSecret
-  /** Environment variable Alchemy receives; defaults to the credential's name. */
-  readonly env?: string
-}
-
 export interface Verification {
-  readonly credentials?: ReadonlyArray<CredentialBinding>
+  readonly secrets?: ReadonlyArray<AppSecret>
   readonly wait: (input: { readonly version: string }) => Effect.Effect<void, DeployError | CredentialsError, Keyring>
 }
 
 export interface DeployOptions<S extends Settings> {
   /** The app's name, for ~/.config/<app>/deploy.json. */
   readonly app: string
-  /** Use an empty list when Alchemy needs no credentials. */
-  readonly credentials: ReadonlyArray<CredentialBinding>
+  /** What alchemy needs, each passed as its `exportAs`. Use an empty list when it needs none. */
+  readonly secrets: ReadonlyArray<AppSecret>
   /** Runs after a successful deploy and enables the standalone check command. */
   readonly verification?: Verification
   /** What deploying needs that isn't secret, like the domain; adds `config get | set | unset | list`. */
@@ -56,15 +50,13 @@ const asOption = <A>(resolved: A | Option.Option<A>): Option.Option<A> => {
   return Option.some(resolved)
 }
 
-const envName = ({ secret, env }: CredentialBinding) => env ?? secret.name
-
-const resolveBinding = Effect.fnUntraced(function* resolveBinding(binding: CredentialBinding) {
-  const resolved = yield* binding.secret.resolve
-  return Option.map(asOption(resolved), (text): readonly [string, Redacted.Redacted<string>] => [envName(binding), text])
+const resolveSecret = Effect.fnUntraced(function* resolveSecret(secret: AppSecret) {
+  const resolved = yield* secret.resolve
+  return Option.map(asOption(resolved), (text): readonly [string, Redacted.Redacted<string>] => [secret.exportAs, text])
 })
 
-const credentialsEnvironment = (bindings: ReadonlyArray<CredentialBinding>) =>
-  Effect.forEach(bindings, resolveBinding).pipe(Effect.map((entries) => Object.fromEntries(entries.flatMap(Option.toArray))))
+const secretsEnvironment = (secrets: ReadonlyArray<AppSecret>) =>
+  Effect.forEach(secrets, resolveSecret).pipe(Effect.map((entries) => Object.fromEntries(entries.flatMap(Option.toArray))))
 
 const savedSettings = <S extends Settings>(store: Option.Option<JsonStore<S>>) =>
   Option.match(store, { onNone: () => Effect.succeed({}), onSome: settingsEnvironment })
@@ -74,7 +66,7 @@ type SettingsStore<S extends Settings> = ReturnType<typeof makeJsonStore<S, S>>
 // DeployOptions read once: the secrets they name, the settings store, and alchemy's stage arguments.
 interface Plan<S extends Settings> {
   readonly app: string
-  readonly bindings: ReadonlyArray<CredentialBinding>
+  readonly secrets: ReadonlyArray<AppSecret>
   readonly verification: Option.Option<Verification>
   readonly boundNames: ReadonlySet<string>
   readonly sensitiveNames: ReadonlySet<string>
@@ -88,15 +80,15 @@ interface Plan<S extends Settings> {
 const stageArguments = (stage: Option.Option<string>) => Option.match(stage, { onNone: () => [], onSome: (name) => ["--stage", name] })
 
 const planOf = <S extends Settings>(options: DeployOptions<S>): Plan<S> => {
-  const bindings = [...options.credentials, ...(options.verification?.credentials ?? [])]
-  const sensitiveNames = new Set(bindings.filter(({ secret }) => secret.sensitive).flatMap((binding) => [binding.secret.name, envName(binding)]))
+  const secrets = [...options.secrets, ...(options.verification?.secrets ?? [])]
+  const sensitiveNames = new Set(secrets.filter((secret) => secret.sensitive).flatMap((secret) => [secret.name, secret.exportAs]))
   return {
     app: options.app,
-    bindings,
+    secrets,
     verification: Option.fromUndefinedOr(options.verification),
-    boundNames: new Set(bindings.map(envName)),
+    boundNames: new Set(secrets.map((secret) => secret.exportAs)),
     sensitiveNames,
-    publicNames: new Set(bindings.map(envName).filter((name) => !sensitiveNames.has(name))),
+    publicNames: new Set(secrets.map((secret) => secret.exportAs).filter((name) => !sensitiveNames.has(name))),
     store: Option.map(Option.fromUndefinedOr(options.settings), (schema) => makeJsonStore(settingsPath(options.app), schema)),
     stage: stageArguments(Option.fromUndefinedOr(options.stage)),
     build: Option.fromUndefinedOr(options.build),
@@ -120,7 +112,7 @@ const buildEnvironment = <S extends Settings>(plan: Plan<S>, env: Readonly<Recor
 const environments = Effect.fnUntraced(function* environments<S extends Settings>(plan: Plan<S>) {
   const settings = yield* savedSettings(plan.store)
   const shell = shellEnvironment()
-  const resolved = yield* credentialsEnvironment(plan.bindings)
+  const resolved = yield* secretsEnvironment(plan.secrets)
   return { build: buildEnvironment(plan, { ...settings, ...shell }, resolved), alchemy: { ...withoutSecrets({ ...settings, ...shell }, plan.boundNames), ...resolved } } satisfies Environments
 })
 
@@ -204,28 +196,31 @@ const deployCommand = <S extends Settings>(plan: Plan<S>, credentials: Credentia
 }
 
 const validateOptions = (options: object) => {
-  const removed = ["url", "secrets", "cloudflare", "cloudflareApiToken"].filter((name) => Object.hasOwn(options, name))
+  const removed = ["url", "credentials", "cloudflare", "cloudflareApiToken"].filter((name) => Object.hasOwn(options, name))
   if (removed.length > 0) {
-    throw new TypeError(`Removed deploy options: ${removed.join(", ")}. Use credentials and verification instead. For Workers, use Deploy.Cloudflare.deployCredentials() and Deploy.Cloudflare.workerHealth(urlName).`)
+    throw new TypeError(`Removed deploy options: ${removed.join(", ")}. Use secrets and verification instead, with exportAs on a secret alchemy reads under another name. For Workers, use Deploy.Cloudflare.deploySecrets() and Deploy.Cloudflare.workerHealth(urlName).`)
   }
-  if (!("credentials" in options) || !Array.isArray(options.credentials)) {
-    throw new TypeError("Declare deploy credentials explicitly: use credentials: [] for none or Deploy.Cloudflare.deployCredentials() for Workers.")
+  // A verifier written for the old API would otherwise lose its secrets silently.
+  if ("verification" in options && typeof options.verification === "object" && options.verification !== null && Object.hasOwn(options.verification, "credentials")) {
+    throw new TypeError("Removed verification option: credentials. Use secrets instead.")
+  }
+  if (!("secrets" in options) || !Array.isArray(options.secrets)) {
+    throw new TypeError("Declare deploy secrets explicitly: use secrets: [] for none or Deploy.Cloudflare.deploySecrets() for Workers.")
   }
 }
 
-const declaredSecrets = (bindings: ReadonlyArray<CredentialBinding>): ReadonlyArray<AppSecret> => {
+const declaredSecrets = (secrets: ReadonlyArray<AppSecret>): ReadonlyArray<AppSecret> => {
   const sources = new Map<string, AppSecret>()
   const destinations = new Map<string, AppSecret>()
-  for (const binding of bindings) {
-    const { secret } = binding
-    const name = envName(binding)
+  for (const secret of secrets) {
+    const name = secret.exportAs
     const source = sources.get(secret.name)
     const destination = destinations.get(name)
     if (source !== undefined && source !== secret) {
-      throw new TypeError(`Conflicting definitions for deploy credential ${secret.name}. Reuse the same credential declaration.`)
+      throw new TypeError(`Conflicting definitions for deploy secret ${secret.name}. Reuse the same credential declaration.`)
     }
     if (destination !== undefined && destination !== secret) {
-      throw new TypeError(`Multiple deploy credentials target environment variable ${name}.`)
+      throw new TypeError(`Multiple deploy secrets export as ${name}.`)
     }
     sources.set(secret.name, secret)
     destinations.set(name, secret)
@@ -236,7 +231,7 @@ const declaredSecrets = (bindings: ReadonlyArray<CredentialBinding>): ReadonlyAr
 export const make = <S extends Settings>(options: DeployOptions<S>) => {
   validateOptions(options)
   const plan = planOf(options)
-  const credentials = makeCredentials(declaredSecrets(plan.bindings))
+  const credentials = makeCredentials(declaredSecrets(plan.secrets))
   return { command: deployCommand(plan, credentials), credentials }
 }
 

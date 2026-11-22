@@ -13,6 +13,8 @@ export interface SecretOptions<A, Optional extends boolean> {
   readonly schema?: Schema.Codec<A, string>
   // False shows the value while typing it and in status. Defaults to true.
   readonly sensitive?: boolean
+  // The variable a child process, like alchemy, receives it as; defaults to the name. Lookup still reads `name`.
+  readonly exportAs?: string
 }
 
 export type Source = "env" | "keyring"
@@ -41,6 +43,7 @@ export interface SecretEntry {
 export interface Secret<Name extends string, A = string, Optional extends boolean = false> extends SecretEntry {
   readonly name: Name
   readonly optional: Optional
+  readonly exportAs: string
   // The environment first, then the keyring.
   readonly resolve: Effect.Effect<Optional extends true ? Option.Option<Value<Name, A>> : Value<Name, A>, CredentialsError, Keyring>
 }
@@ -126,5 +129,5 @@ export const secret = <const Name extends string, A = string, const Optional ext
     return yield* keyring.remove(name)
   })
 
-  return { name, label, optional, sensitive: options.sensitive ?? true, lookup, resolve, save, remove, validate }
+  return { name, label, optional, sensitive: options.sensitive ?? true, exportAs: options.exportAs ?? name, lookup, resolve, save, remove, validate }
 }

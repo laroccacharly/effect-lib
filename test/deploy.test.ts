@@ -12,11 +12,13 @@ const EmailAuthSecret = secret("EMAIL_AUTH_SECRET")
 const PushToken = secret("PUSH_TOKEN", { optional: true })
 const DeploySettings = Schema.Struct({ PUBLIC_URL: Schema.optionalKey(Schema.String) })
 const workerHealth = Cloudflare.workerHealth("DEMO_URL")
-const workerCredentials = (...secrets: ReadonlyArray<AppSecret>) => [...Cloudflare.deployCredentials(), ...secrets.map((secret) => ({ secret }))]
+const workerSecrets = (...secrets: ReadonlyArray<AppSecret>) => [...Cloudflare.deploySecrets(), ...secrets]
 
-test("rejects removed deploy options instead of silently skipping credentials or verification", () => {
-  const legacy = { app: "demo", credentials: [], url: "DEMO_URL", cloudflare: false }
-  expect(() => make(legacy)).toThrow("Removed deploy options: url, cloudflare. Use credentials and verification instead.")
+test("rejects removed deploy options instead of silently skipping secrets or verification", () => {
+  const legacy = { app: "demo", secrets: [], credentials: [], url: "DEMO_URL", cloudflare: false }
+  expect(() => make(legacy)).toThrow("Removed deploy options: url, credentials, cloudflare. Use secrets and verification instead")
+  const legacyVerification = { app: "demo", secrets: [], verification: { credentials: [], wait: () => Effect.void } }
+  expect(() => make(legacyVerification)).toThrow("Removed verification option: credentials. Use secrets instead.")
 })
 
 // The deployed Worker: /health answers `served`, or a 503 when it is none.
@@ -95,7 +97,7 @@ const exists = async (name: string) => await Bun.file(join(project, name)).exist
 const recordBuildEnv = ["sh", "-c", 'env > "$0"', "build-env"] as const
 
 test("builds with the settings but no secret, then deploys with the keyring's token, the secrets and the settings", async () => {
-  const options = { app: "demo", credentials: workerCredentials(EmailAuthSecret, PushToken), verification: workerHealth, settings: DeploySettings, build: recordBuildEnv, stage: "prod" }
+  const options = { app: "demo", secrets: workerSecrets(EmailAuthSecret, PushToken), verification: workerHealth, settings: DeploySettings, build: recordBuildEnv, stage: "prod" }
   await runDeploy(options, ["config", "set", "PUBLIC_URL", "https://demo.example.com"])
   process.env["CLOUDFLARE_API_TOKEN"] = "shell-token"
   await runDeploy(options, [], { EMAIL_AUTH_SECRET: "signing-secret" })
@@ -123,7 +125,7 @@ test("the deployed version is the commit, -dirty with uncommitted changes", asyn
   expect(await projectVersion()).toBe(commit)
   await writeFile(join(project, "worker.ts"), "export default { changed: true }\n")
   served = Option.some(`${commit}-dirty`)
-  await runDeploy({ app: "demo", credentials: workerCredentials(), verification: workerHealth }, [])
+  await runDeploy({ app: "demo", secrets: workerSecrets(), verification: workerHealth }, [])
   expect((await readEnvFile("alchemy-env"))["DEPLOY_VERSION"]).toBe(`${commit}-dirty`)
 })
 
@@ -142,13 +144,13 @@ test("deploy waits until /health answers the version just deployed", async () =>
   setTimeout(() => {
     served = deployed
   }, 600)
-  await runDeploy({ app: "demo", credentials: workerCredentials(), verification: workerHealth }, [])
+  await runDeploy({ app: "demo", secrets: workerSecrets(), verification: workerHealth }, [])
   expect(healthChecks).toBeGreaterThan(1)
 })
 
 test("deploy fails when /health still answers another version after 10 seconds", async () => {
   served = Option.some("04a40f3")
-  const error = await runDeploy({ app: "demo", credentials: workerCredentials(), verification: workerHealth }, []).catch((failure: Error) => failure)
+  const error = await runDeploy({ app: "demo", secrets: workerSecrets(), verification: workerHealth }, []).catch((failure: Error) => failure)
   expect(String(error)).toContain(`${worker.url.origin}/health still answers 04a40f3, not ${await projectVersion()}`)
 }, 15_000)
 
@@ -158,50 +160,49 @@ test("check waits for /health to answer this checkout's version, with only the u
   setTimeout(() => {
     served = Option.some(deployedVersion)
   }, 300)
-  await runDeploy({ app: "demo", credentials: workerCredentials(EmailAuthSecret), verification: workerHealth, build: recordBuildEnv }, ["check"], {}, { DEMO_URL: worker.url.origin })
+  await runDeploy({ app: "demo", secrets: workerSecrets(EmailAuthSecret), verification: workerHealth, build: recordBuildEnv }, ["check"], {}, { DEMO_URL: worker.url.origin })
   expect(healthChecks).toBeGreaterThan(1)
   expect(await exists("build-env")).toBe(false)
   expect(await exists("alchemy-args")).toBe(false)
 })
 
 test("a url that is no https origin fails before building", async () => {
-  const error = await runDeploy({ app: "demo", credentials: workerCredentials(), verification: workerHealth, build: recordBuildEnv }, [], {}, { ...stored, DEMO_URL: "http://demo.example.com" }).catch((failure: Error) => failure)
+  const error = await runDeploy({ app: "demo", secrets: workerSecrets(), verification: workerHealth, build: recordBuildEnv }, [], {}, { ...stored, DEMO_URL: "http://demo.example.com" }).catch((failure: Error) => failure)
   expect(String(error)).toContain("DEMO_URL")
   expect(await exists("build-env")).toBe(false)
 })
 
 test("a checkout outside git fails before building", async () => {
   await rm(join(project, ".git"), { recursive: true })
-  const error = await runDeploy({ app: "demo", credentials: workerCredentials(), verification: workerHealth, build: recordBuildEnv }, []).catch((failure: Error) => failure)
+  const error = await runDeploy({ app: "demo", secrets: workerSecrets(), verification: workerHealth, build: recordBuildEnv }, []).catch((failure: Error) => failure)
   expect(String(error)).toContain("git describe failed")
   expect(await exists("build-env")).toBe(false)
 })
 
 test("an app can deploy with another token, such as CLOUDFLARE_API_TOKEN", async () => {
-  await runDeploy({ app: "demo", credentials: Cloudflare.deployCredentials("CLOUDFLARE_API_TOKEN"), verification: workerHealth }, [], {}, { ...stored, CLOUDFLARE_API_TOKEN: "app-token" })
+  await runDeploy({ app: "demo", secrets: Cloudflare.deploySecrets("CLOUDFLARE_API_TOKEN"), verification: workerHealth }, [], {}, { ...stored, CLOUDFLARE_API_TOKEN: "app-token" })
   expect((await readEnvFile("alchemy-env"))["CLOUDFLARE_API_TOKEN"]).toBe("app-token")
 })
 
 test("does not inherit an optional credential's alias when its source is absent", async () => {
-  const OptionalNumber = secret("OPTIONAL_NUMBER", { optional: true, schema: Schema.String.check(Schema.isPattern(/^\d+$/u)), sensitive: false })
   process.env["NUMBER_ALIAS"] = "not a number"
-  await runDeploy({ app: "demo", credentials: [{ secret: OptionalNumber, env: "NUMBER_ALIAS" }], build: recordBuildEnv }, [])
+  await runDeploy({ app: "demo", secrets: [secret("OPTIONAL_NUMBER", { optional: true, schema: Schema.String.check(Schema.isPattern(/^\d+$/u)), sensitive: false, exportAs: "NUMBER_ALIAS" })], build: recordBuildEnv }, [])
   expect((await readEnvFile("alchemy-env"))["NUMBER_ALIAS"]).toBeUndefined()
   expect((await readEnvFile("build-env"))["NUMBER_ALIAS"]).toBeUndefined()
 })
 
 test("rejects conflicting source and destination definitions before exposing auth commands", () => {
   const publicEmail = secret("EMAIL_AUTH_SECRET", { sensitive: false })
-  const credentials = [{ secret: EmailAuthSecret }]
-  const verification = { credentials: [{ secret: publicEmail }], wait: () => Effect.void }
-  expect(() => make({ app: "demo", credentials, verification })).toThrow("Conflicting definitions for deploy credential EMAIL_AUTH_SECRET")
-  expect(() => make({ app: "demo", credentials: [...credentials, { secret: PushToken, env: "EMAIL_AUTH_SECRET" }] })).toThrow("Multiple deploy credentials target environment variable EMAIL_AUTH_SECRET")
+  const verification = { secrets: [publicEmail], wait: () => Effect.void }
+  expect(() => make({ app: "demo", secrets: [EmailAuthSecret], verification })).toThrow("Conflicting definitions for deploy secret EMAIL_AUTH_SECRET")
+  const pushAsEmail = secret("PUSH_TOKEN", { optional: true, exportAs: "EMAIL_AUTH_SECRET" })
+  expect(() => make({ app: "demo", secrets: [EmailAuthSecret, pushAsEmail] })).toThrow("Multiple deploy secrets export as EMAIL_AUTH_SECRET")
 })
 
 test("the build never sees a sensitive secret, even one exported in the shell", async () => {
   process.env["EMAIL_AUTH_SECRET"] = "shell-secret"
   process.env["WORKER_CLOUDFLARE_API_TOKEN"] = "shell-worker-token"
-  await runDeploy({ app: "demo", credentials: workerCredentials(EmailAuthSecret), verification: workerHealth, build: recordBuildEnv }, [], { EMAIL_AUTH_SECRET: "shell-secret" })
+  await runDeploy({ app: "demo", secrets: workerSecrets(EmailAuthSecret), verification: workerHealth, build: recordBuildEnv }, [], { EMAIL_AUTH_SECRET: "shell-secret" })
   const built = await readEnvFile("build-env")
   expect(built["EMAIL_AUTH_SECRET"]).toBeUndefined()
   expect(built["WORKER_CLOUDFLARE_API_TOKEN"]).toBeUndefined()
@@ -209,7 +210,7 @@ test("the build never sees a sensitive secret, even one exported in the shell", 
 })
 
 test("a variable in the shell wins over the saved setting", async () => {
-  const options = { app: "demo", credentials: workerCredentials(), verification: workerHealth, settings: DeploySettings }
+  const options = { app: "demo", secrets: workerSecrets(), verification: workerHealth, settings: DeploySettings }
   await runDeploy(options, ["config", "set", "PUBLIC_URL", "https://saved.example.com"])
   process.env["PUBLIC_URL"] = "https://shell.example.com"
   await runDeploy(options, [])
@@ -217,7 +218,7 @@ test("a variable in the shell wins over the saved setting", async () => {
 })
 
 test("a missing secret fails before building", async () => {
-  const error = await runDeploy({ app: "demo", credentials: workerCredentials(EmailAuthSecret), verification: workerHealth, build: recordBuildEnv }, []).catch((failure: Error) => failure)
+  const error = await runDeploy({ app: "demo", secrets: workerSecrets(EmailAuthSecret), verification: workerHealth, build: recordBuildEnv }, []).catch((failure: Error) => failure)
   expect(String(error)).toContain("EMAIL_AUTH_SECRET")
   expect(await exists("build-env")).toBe(false)
   expect(await exists("alchemy-args")).toBe(false)
@@ -226,7 +227,7 @@ test("a missing secret fails before building", async () => {
 const recordPreflightEnv = ["sh", "-c", 'env > "$0"', "preflight-env"] as const
 
 test("preflight checks run first, without secrets, then build and deploy", async () => {
-  await runDeploy({ app: "demo", credentials: workerCredentials(EmailAuthSecret), verification: workerHealth, preflight: [recordPreflightEnv, ["true"]], build: recordBuildEnv }, [], {
+  await runDeploy({ app: "demo", secrets: workerSecrets(EmailAuthSecret), verification: workerHealth, preflight: [recordPreflightEnv, ["true"]], build: recordBuildEnv }, [], {
     EMAIL_AUTH_SECRET: "shell-secret",
   })
   const checked = await readEnvFile("preflight-env")
@@ -238,7 +239,7 @@ test("preflight checks run first, without secrets, then build and deploy", async
 
 test("a failing preflight check stops the deploy before the secrets, the build and alchemy", async () => {
   const error = await runDeploy(
-    { app: "demo", credentials: workerCredentials(EmailAuthSecret), verification: workerHealth, preflight: [["false"], recordPreflightEnv], build: recordBuildEnv },
+    { app: "demo", secrets: workerSecrets(EmailAuthSecret), verification: workerHealth, preflight: [["false"], recordPreflightEnv], build: recordBuildEnv },
     ["plan"],
     {},
     {}
@@ -250,14 +251,14 @@ test("a failing preflight check stops the deploy before the secrets, the build a
 })
 
 test("plan --adopt runs alchemy plan with the version, with no build when none is wired, and never asks /health", async () => {
-  await runDeploy({ app: "demo", credentials: workerCredentials(), verification: workerHealth }, ["plan", "--adopt"])
+  await runDeploy({ app: "demo", secrets: workerSecrets(), verification: workerHealth }, ["plan", "--adopt"])
   expect(await alchemyArgs()).toEqual(["plan", "--adopt"])
   expect((await readEnvFile("alchemy-env"))["DEPLOY_VERSION"]).toBe(await projectVersion())
   expect(healthChecks).toBe(0)
 })
 
 test("destroy leaves alchemy to ask before deleting", async () => {
-  await runDeploy({ app: "demo", credentials: workerCredentials(), verification: workerHealth, build: recordBuildEnv }, ["destroy"])
+  await runDeploy({ app: "demo", secrets: workerSecrets(), verification: workerHealth, build: recordBuildEnv }, ["destroy"])
   expect(await alchemyArgs()).toEqual(["destroy"])
   expect(await exists("build-env")).toBe(false)
   expect(healthChecks).toBe(0)
@@ -265,7 +266,7 @@ test("destroy leaves alchemy to ask before deleting", async () => {
 
 test("an app off Cloudflare, without a url, deploys with its own secrets only and waits for no /health", async () => {
   const ProjectId = secret("PROJECT_ID", { sensitive: false })
-  const options = { app: "demo", credentials: [{ secret: ProjectId }, { secret: EmailAuthSecret }], build: recordBuildEnv }
+  const options = { app: "demo", secrets: [ProjectId, EmailAuthSecret], build: recordBuildEnv }
   served = Option.none()
   process.env["CLOUDFLARE_API_TOKEN"] = "ambient-token"
   await runDeploy(options, [], { EMAIL_AUTH_SECRET: "signing-secret" }, { PROJECT_ID: "project" })
@@ -285,7 +286,7 @@ test("an app off Cloudflare, without a url, deploys with its own secrets only an
 
 test("alchemy exiting with an error fails the deploy", async () => {
   process.env["FAKE_ALCHEMY_EXIT"] = "3"
-  const error = await runDeploy({ app: "demo", credentials: workerCredentials(), verification: workerHealth }, []).catch((failure: Error) => failure)
+  const error = await runDeploy({ app: "demo", secrets: workerSecrets(), verification: workerHealth }, []).catch((failure: Error) => failure)
   expect(String(error)).toContain("bunx alchemy deploy --yes exited with 3")
   expect(healthChecks).toBe(0)
 })
