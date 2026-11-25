@@ -19,6 +19,8 @@ export interface ServiceConfig {
   readonly restartSec?: number
   // Defaults to default.target, so the service starts at login.
   readonly wantedBy?: string
+  // Defaults to true. When false the unit has no [Install] section: it runs only between install and uninstall.
+  readonly startAtLogin?: boolean
   // Defaults to $XDG_CONFIG_HOME/systemd/user.
   readonly unitDir?: string
   // Extra directives appended to each section, e.g. { unit: { After: "network-online.target" } }.
@@ -28,6 +30,8 @@ export interface ServiceConfig {
     readonly install?: Readonly<Record<string, string>>
   }
 }
+
+export const startsAtLogin = (config: ServiceConfig): boolean => config.startAtLogin ?? true
 
 export const unitName = (config: ServiceConfig): string => `${config.name}.service`
 
@@ -51,6 +55,13 @@ const execArgument = (argument: string) => {
 const section = (title: string, directives: ReadonlyArray<readonly [string, string]>, extra: Readonly<Record<string, string>> = {}) =>
   [`[${title}]`, ...[...directives, ...Object.entries(extra)].map(([key, value]) => `${key}=${value}`)].join("\n")
 
+const installSection = (config: ServiceConfig) => {
+  if (!startsAtLogin(config)) {
+    return []
+  }
+  return [section("Install", [["WantedBy", config.wantedBy ?? "default.target"]], config.extra?.install)]
+}
+
 // `bun` is the runtime's absolute path, as stableBun resolves it.
 export const unitFile = (config: ServiceConfig, bun: string): string =>
   `${[
@@ -65,5 +76,5 @@ export const unitFile = (config: ServiceConfig, bun: string): string =>
       ],
       config.extra?.service
     ),
-    section("Install", [["WantedBy", config.wantedBy ?? "default.target"]], config.extra?.install),
+    ...installSection(config),
   ].join("\n\n")}\n`

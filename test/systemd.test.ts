@@ -46,6 +46,17 @@ test("escapes arguments systemd would split or expand", () => {
   expect(unit).toContain('Environment="NOTE=a \\"b\\" 50%%"\n')
 })
 
+test("leaves out [Install] when it does not start at login", () => {
+  expect(unitFile({ ...config, startAtLogin: false }, "/opt/bun")).toBe(`[Unit]
+Description=Bot
+
+[Service]
+ExecStart=/opt/bun /repo/src/cli.ts run
+Restart=on-failure
+RestartSec=30
+`)
+})
+
 test("puts the unit in the user unit directory", () => {
   expect(unitPath({ ...config, unitDir: "/units" })).toBe("/units/bot.service")
 })

@@ -2,7 +2,7 @@ import { delimiter, dirname, isAbsolute, join, sep } from "node:path"
 import { Effect, FileSystem, Schema } from "effect"
 import { ChildProcess, type ChildProcessSpawner } from "effect/process"
 import { runToEnd } from "../shared/process.ts"
-import { unitFile, unitName, unitPath, type ServiceConfig } from "./unit.ts"
+import { startsAtLogin, unitFile, unitName, unitPath, type ServiceConfig } from "./unit.ts"
 
 export class SystemdServiceError extends Schema.TaggedError<SystemdServiceError>()("SystemdServiceError", {
   message: Schema.String,
@@ -74,22 +74,38 @@ const writeUnit: (config: ServiceConfig) => Effect.Effect<void, SystemdServiceEr
   yield* systemctl(["daemon-reload"])
 })
 
-// Writes the unit, then enables and starts it; fails when it is already installed.
+const startCommand = (config: ServiceConfig) => {
+  if (startsAtLogin(config)) {
+    return ["enable", "--now", unitName(config)]
+  }
+  return ["start", unitName(config)]
+}
+
+// Writes the unit, then starts it, enabling it first unless startAtLogin is false; fails when it is already installed.
 export const install: (config: ServiceConfig) => Effect.Effect<void, SystemdServiceError, Services> = Effect.fn("install")(function* install(config: ServiceConfig) {
   if (yield* isInstalled(config)) {
     return yield* new SystemdServiceError({ message: `${unitPath(config)} already exists; reinstall instead` })
   }
   yield* writeUnit(config)
-  yield* systemctl(["enable", "--now", unitName(config)])
+  yield* systemctl(startCommand(config))
   yield* Effect.logInfo(`Installed and started ${unitName(config)}; follow it with \`journalctl --user -u ${config.name} -f\``)
 })
 
-// Rewrites the unit, then enables and restarts it, whether or not it was installed.
+// Rewrites the unit, then restarts it, enabling it first unless startAtLogin is false, whether or not it was installed.
 export const reinstall: (config: ServiceConfig) => Effect.Effect<void, SystemdServiceError, Services> = Effect.fn("reinstall")(function* reinstall(config: ServiceConfig) {
   yield* writeUnit(config)
-  yield* systemctl(["enable", unitName(config)])
+  if (startsAtLogin(config)) {
+    yield* systemctl(["enable", unitName(config)])
+  }
   yield* systemctl(["restart", unitName(config)])
   yield* Effect.logInfo(`Rewrote and restarted ${unitName(config)}`)
+})
+
+// `is-active` exits non-zero for every state but active.
+export const isActive: (config: ServiceConfig) => Effect.Effect<boolean, SystemdServiceError, ChildProcessSpawner.ChildProcessSpawner> = Effect.fn("isActive")(function* isActive(
+  config: ServiceConfig
+) {
+  return (yield* systemctl(["is-active", "--quiet", unitName(config)], true)) === 0
 })
 
 // Stops, disables and removes the unit; false when it was not installed.
