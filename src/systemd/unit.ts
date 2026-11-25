@@ -73,6 +73,8 @@ export const unitFile = (config: ServiceConfig, bun: string): string =>
         ...Object.entries(config.environment ?? {}).map(([key, value]): [string, string] => ["Environment", quote(escapeSpecifiers(`${key}=${value}`))]),
         ["Restart", config.restart ?? "on-failure"],
         ["RestartSec", String(config.restartSec ?? 30)],
+        // Effect exits with 130 when SIGTERM interrupts it, so a stop or restart is not logged as a failure.
+        ["SuccessExitStatus", "130"],
       ],
       config.extra?.service
     ),

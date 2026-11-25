@@ -16,6 +16,7 @@ Description=Bot
 ExecStart=/opt/bun /repo/src/cli.ts run
 Restart=on-failure
 RestartSec=30
+SuccessExitStatus=130
 
 [Install]
 WantedBy=default.target
@@ -54,6 +55,7 @@ Description=Bot
 ExecStart=/opt/bun /repo/src/cli.ts run
 Restart=on-failure
 RestartSec=30
+SuccessExitStatus=130
 `)
 })
 
