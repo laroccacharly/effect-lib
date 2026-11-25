@@ -5,7 +5,7 @@ import { delimiter, join } from "node:path"
 import { BunServices } from "@effect/platform-bun"
 import { Effect } from "effect"
 import { Command } from "effect/cli"
-import { publicUrl, serve, tailscaleCommand, terminalQrCode, unserve, urlFromDnsName } from "../src/tailscale/index.ts"
+import { firstAutomaticPort, publicUrl, serve, serveOnFreePort, tailscaleCommand, terminalQrCode, unserve, unserveIfOurs, urlFromDnsName } from "../src/tailscale/index.ts"
 import { qrMatrix } from "../src/tailscale/qr-matrix.ts"
 
 const run = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) => Effect.runPromise(Effect.provide(effect, BunServices.layer))
@@ -143,6 +143,35 @@ test.skipIf(live)("status prints tailscale status, the serve configuration, heal
   expect(output).toBe(
     "Tailscale status:\n100.1.2.3 box\nTailscale serve configuration:\nhttps://box.tail.ts.net:8443\nmemo server: OK on 3000\nURL: https://box.tail.ts.net:8443"
   )
+})
+
+// Mappings other apps already have, as `tailscale serve status --json` lists them.
+const existingMappings = (mappings: Readonly<Record<number, string>>) =>
+  writeFileSync(
+    serveState,
+    JSON.stringify({
+      TCP: Object.fromEntries(Object.keys(mappings).map((port) => [port, { HTTPS: true }])),
+      Web: Object.fromEntries(Object.entries(mappings).map(([port, proxy]) => [`box.tail.ts.net:${port}`, { Handlers: { "/": { Proxy: proxy } } }])),
+    })
+  )
+
+test.skipIf(live)("serveOnFreePort takes the first https port from the first automatic one up that has no mapping", async () => {
+  existingMappings({ 443: "http://127.0.0.1:3773", [firstAutomaticPort]: "http://127.0.0.1:7300", [firstAutomaticPort + 1]: "http://127.0.0.1:7301" })
+  const tailscalePort = await run(serveOnFreePort(3000))
+  expect(tailscalePort).toBe(firstAutomaticPort + 2)
+  expect(calledWith()).toContain(`serve --bg --https=${firstAutomaticPort + 2} http://127.0.0.1:3000`)
+})
+
+test.skipIf(live)("serveOnFreePort keeps the port already serving the server", async () => {
+  existingMappings({ [firstAutomaticPort]: "http://127.0.0.1:7300", [firstAutomaticPort + 5]: "http://127.0.0.1:3000" })
+  expect(await run(serveOnFreePort(3000))).toBe(firstAutomaticPort + 5)
+})
+
+test.skipIf(live)("unserveIfOurs turns off the port only while it still serves the server", async () => {
+  existingMappings({ [firstAutomaticPort]: "http://127.0.0.1:7300" })
+  expect(await run(unserveIfOurs({ serverPort: 3000, tailscalePort: firstAutomaticPort }))).toBe(false)
+  expect(await run(unserveIfOurs({ serverPort: 7300, tailscalePort: firstAutomaticPort }))).toBe(true)
+  expect(calledWith().filter((call) => call.endsWith(" off"))).toEqual([`serve --https=${firstAutomaticPort} off`])
 })
 
 // On the real tailnet, on an HTTPS port no app uses; needs tailscale up with this user as operator.

@@ -64,6 +64,30 @@ const targetOn = (serveStatus: ServeStatus, tailscalePort: number): Option.Optio
   return Option.none()
 }
 
+// The HTTPS ports with a mapping, web or TCP.
+const takenPorts = (serveStatus: ServeStatus): ReadonlySet<number> =>
+  new Set([...Object.keys(serveStatus.TCP ?? {}), ...Object.keys(serveStatus.Web ?? {}).map((hostPort) => hostPort.split(":").at(-1) ?? "")].map(Number))
+
+// Where serveOnFreePort starts looking, above the ports apps pick by hand: 443, 8443 and the ones right after it.
+export const firstAutomaticPort = 8460
+
+// The HTTPS port already proxying to the server, so serving it again keeps its URL.
+const portServing = (serveStatus: ServeStatus, serverPort: number): Option.Option<number> => {
+  const web = Object.entries(serveStatus.Web ?? {}).find(([, config]) => config.Handlers?.["/"]?.Proxy === serverTarget(serverPort))
+  return Option.map(Option.fromUndefinedOr(web), ([hostPort]) => Number(hostPort.split(":").at(-1)))
+}
+
+// The first HTTPS port from firstAutomaticPort up without a mapping.
+const firstFreePort = (serveStatus: ServeStatus): Option.Option<number> => {
+  const taken = takenPorts(serveStatus)
+  for (let port = firstAutomaticPort; port <= 65_535; port++) {
+    if (!taken.has(port)) {
+      return Option.some(port)
+    }
+  }
+  return Option.none()
+}
+
 // The public HTTPS URL for a tailnet DNS name, without the port when it is 443.
 export const urlFromDnsName = (dnsName: string, tailscalePort: number): string => {
   const host = dnsName.replace(/\.$/u, "")
@@ -73,7 +97,9 @@ export const urlFromDnsName = (dnsName: string, tailscalePort: number): string =
   return `https://${host}:${tailscalePort}`
 }
 
-const servedTarget = (tailscalePort: number) => decodeOutput(ServeStatusJson, ["serve", "status", "--json"]).pipe(Effect.map((serveStatus) => targetOn(serveStatus, tailscalePort)))
+const readServeStatus = Effect.suspend(() => decodeOutput(ServeStatusJson, ["serve", "status", "--json"]))
+
+const servedTarget = (tailscalePort: number) => readServeStatus.pipe(Effect.map((serveStatus) => targetOn(serveStatus, tailscalePort)))
 
 // Fails when the HTTPS port already serves something other than this server, so two apps never clobber each other.
 const ensurePortFree: (ports: Ports) => Effect.Effect<void, TailscaleError, Spawner> = Effect.fn("ensurePortFree")(function* ensurePortFree(ports: Ports) {
@@ -97,6 +123,28 @@ export const unserve: (tailscalePort: number) => Effect.Effect<void, TailscaleEr
     return
   }
   yield* tailscale(["serve", `--https=${tailscalePort}`, "off"])
+})
+
+// Publishes the local server on the first free HTTPS port from firstAutomaticPort up, or the one already serving it, and returns that port.
+// For servers started on demand, whose URL is printed at startup: the port, and so the URL, can change from one start to the next.
+export const serveOnFreePort: (serverPort: number) => Effect.Effect<number, TailscaleError, Spawner> = Effect.fn("serveOnFreePort")(function* serveOnFreePort(serverPort: number) {
+  const serveStatus = yield* readServeStatus
+  const tailscalePort = Option.orElse(portServing(serveStatus, serverPort), () => firstFreePort(serveStatus))
+  if (Option.isNone(tailscalePort)) {
+    return yield* new TailscaleError({ message: `no free https port from ${firstAutomaticPort} up` })
+  }
+  yield* tailscale(["serve", "--bg", `--https=${tailscalePort.value}`, serverTarget(serverPort)])
+  return tailscalePort.value
+})
+
+// Stops publishing the HTTPS port only while it still proxies to the server, so a port another app took since is left alone; true when it did.
+export const unserveIfOurs: (ports: Ports) => Effect.Effect<boolean, TailscaleError, Spawner> = Effect.fn("unserveIfOurs")(function* unserveIfOurs(ports: Ports) {
+  const target = yield* servedTarget(ports.tailscalePort)
+  if (Option.getOrUndefined(target) !== serverTarget(ports.serverPort)) {
+    return false
+  }
+  yield* tailscale(["serve", `--https=${ports.tailscalePort}`, "off"])
+  return true
 })
 
 // The output of `tailscale status`, which fails when tailscale is stopped or logged out.
