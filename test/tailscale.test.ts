@@ -165,13 +165,14 @@ test.skipIf(live)("serveOnFreePort takes the first https port from the first aut
 test.skipIf(live)("serveOnFreePort keeps the port already serving the server", async () => {
   existingMappings({ [firstAutomaticPort]: "http://127.0.0.1:7300", [firstAutomaticPort + 5]: "http://127.0.0.1:3000" })
   expect(await run(serveOnFreePort(3000))).toBe(firstAutomaticPort + 5)
+  expect(calledWith().filter((call) => call.startsWith("serve --bg"))).toEqual([])
 })
 
 test.skipIf(live)("unserveIfOurs turns off the port only while it still serves the server", async () => {
   existingMappings({ [firstAutomaticPort]: "http://127.0.0.1:7300" })
   expect(await run(unserveIfOurs({ serverPort: 3000, tailscalePort: firstAutomaticPort }))).toBe(false)
   expect(await run(unserveIfOurs({ serverPort: 7300, tailscalePort: firstAutomaticPort }))).toBe(true)
-  expect(calledWith().filter((call) => call.endsWith(" off"))).toEqual([`serve --https=${firstAutomaticPort} off`])
+  expect(calledWith().filter((call) => call.endsWith(" off"))).toEqual([`serve --https=${firstAutomaticPort} --set-path=/ off`])
 })
 
 // On the real tailnet, on an HTTPS port no app uses; needs tailscale up with this user as operator.

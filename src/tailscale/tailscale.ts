@@ -125,11 +125,16 @@ export const unserve: (tailscalePort: number) => Effect.Effect<void, TailscaleEr
   yield* tailscale(["serve", `--https=${tailscalePort}`, "off"])
 })
 
-// Publishes the local server on the first free HTTPS port from firstAutomaticPort up, or the one already serving it, and returns that port.
+// Publishes the local server on the first free HTTPS port from firstAutomaticPort up, unless a port already serves it, and returns that port.
 // For servers started on demand, whose URL is printed at startup: the port, and so the URL, can change from one start to the next.
 export const serveOnFreePort: (serverPort: number) => Effect.Effect<number, TailscaleError, Spawner> = Effect.fn("serveOnFreePort")(function* serveOnFreePort(serverPort: number) {
   const serveStatus = yield* readServeStatus
-  const tailscalePort = Option.orElse(portServing(serveStatus, serverPort), () => firstFreePort(serveStatus))
+  // Left as it is, since serving it again would drop a Funnel set on it.
+  const existing = portServing(serveStatus, serverPort)
+  if (Option.isSome(existing)) {
+    return existing.value
+  }
+  const tailscalePort = firstFreePort(serveStatus)
   if (Option.isNone(tailscalePort)) {
     return yield* new TailscaleError({ message: `no free https port from ${firstAutomaticPort} up` })
   }
@@ -143,7 +148,8 @@ export const unserveIfOurs: (ports: Ports) => Effect.Effect<boolean, TailscaleEr
   if (Option.getOrUndefined(target) !== serverTarget(ports.serverPort)) {
     return false
   }
-  yield* tailscale(["serve", `--https=${ports.tailscalePort}`, "off"])
+  // Only the root handler it checked: without a path, `off` also removes other apps mounted on the port.
+  yield* tailscale(["serve", `--https=${ports.tailscalePort}`, "--set-path=/", "off"])
   return true
 })
 
